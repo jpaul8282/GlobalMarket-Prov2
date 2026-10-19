@@ -1,0 +1,110 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // -------------------------------------------------------------
+    // HELPER FUNCTIONS & AUTHENTICATION CHECKS
+    // -------------------------------------------------------------
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // -------------------------------------------------------------
+    // SCHEMA VALIDATORS
+    // -------------------------------------------------------------
+    function isValidUserProfile(data, userId) {
+      return data.userId == userId &&
+        data.fullName is string && data.fullName.size() > 0 && data.fullName.size() <= 100 &&
+        data.email is string && data.email.size() > 0 && data.email.size() <= 120 &&
+        (!('role' in data) || (data.role is string && data.role.size() <= 50)) &&
+        (!('organization' in data) || (data.organization is string && data.organization.size() <= 100)) &&
+        (!('orgId' in data) || (data.orgId is string && data.orgId.size() <= 50)) &&
+        (!('country' in data) || (data.country is string && data.country.size() <= 60)) &&
+        (!('currency' in data) || (data.currency is string && data.currency.size() <= 10)) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp &&
+        data.updatedAt <= request.time;
+    }
+
+    function isValidPayoutSetting(data, userId) {
+      return data.userId == userId &&
+        (data.selectedMethod == 'BANK_WIRE' || data.selectedMethod == 'PAYPAL') &&
+        (!('bankName' in data) || (data.bankName is string && data.bankName.size() <= 100)) &&
+        (!('accountHolderName' in data) || (data.accountHolderName is string && data.accountHolderName.size() <= 100)) &&
+        (!('accountNumberOrIban' in data) || (data.accountNumberOrIban is string && data.accountNumberOrIban.size() <= 50)) &&
+        (!('swiftBic' in data) || (data.swiftBic is string && data.swiftBic.size() <= 20)) &&
+        (!('routingNumber' in data) || (data.routingNumber is string && data.routingNumber.size() <= 30)) &&
+        (!('paypalEmailOrId' in data) || (data.paypalEmailOrId is string && data.paypalEmailOrId.size() <= 120)) &&
+        (!('recipientName' in data) || (data.recipientName is string && data.recipientName.size() <= 100)) &&
+        (!('phoneOrPaypalMe' in data) || (data.phoneOrPaypalMe is string && data.phoneOrPaypalMe.size() <= 100)) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp &&
+        data.updatedAt <= request.time;
+    }
+
+    function isValidOwnerPayoutRecord(data, userId) {
+      return data.userId == userId &&
+        data.payoutId is string && data.payoutId.size() > 0 &&
+        (data.method == 'BANK_WIRE' || data.method == 'PAYPAL') &&
+        data.amount is number && data.amount > 0 &&
+        data.fee is number && data.fee >= 0 &&
+        data.netAmount is number && data.netAmount >= 0 &&
+        data.currency is string && data.currency.size() > 0 && data.currency.size() <= 10 &&
+        data.recipientName is string && data.recipientName.size() > 0 &&
+        data.reference is string && data.reference.size() > 0 &&
+        (data.status == 'PENDING' || data.status == 'PROCESSING' || data.status == 'COMPLETED' || data.status == 'SETTLED') &&
+        data.createdAt is timestamp &&
+        data.createdAt <= request.time;
+    }
+
+    function isValidCloudTransactionLog(data, userId) {
+      return data.userId == userId &&
+        data.logId is string && data.logId.size() > 0 &&
+        (data.logType == 'PAYMENT' || data.logType == 'SCANNED_ITEM' || data.logType == 'PAYOUT' || data.logType == 'WEB_CHECKOUT') &&
+        data.title is string && data.title.size() > 0 &&
+        data.amount is number &&
+        data.currencyCode is string && data.currencyCode.size() > 0 &&
+        data.referenceCode is string && data.referenceCode.size() > 0 &&
+        data.createdAt is timestamp &&
+        data.createdAt <= request.time;
+    }
+
+    // -------------------------------------------------------------
+    // COLLECTION MATCH RULES
+    // -------------------------------------------------------------
+    match /users/{userId} {
+      allow read: if isOwner(userId);
+      allow create: if isOwner(userId) && isValidUserProfile(request.resource.data, userId);
+      allow update: if isOwner(userId) && isValidUserProfile(request.resource.data, userId);
+      allow delete: if isOwner(userId);
+
+      // User's payout configuration
+      match /payout_settings/{settingId} {
+        allow read: if isOwner(userId);
+        allow create: if isOwner(userId) && isValidPayoutSetting(request.resource.data, userId);
+        allow update: if isOwner(userId) && isValidPayoutSetting(request.resource.data, userId);
+        allow delete: if isOwner(userId);
+      }
+
+      // User's owner payout history
+      match /payouts/{payoutId} {
+        allow read: if isOwner(userId);
+        allow create: if isOwner(userId) && isValidOwnerPayoutRecord(request.resource.data, userId);
+        allow update: if isOwner(userId) && isValidOwnerPayoutRecord(request.resource.data, userId);
+        allow delete: if false; // Payout records are immutable audit trail
+      }
+
+      // Cloud synced transaction & audit logs
+      match /transaction_logs/{logId} {
+        allow read: if isOwner(userId);
+        allow create: if isOwner(userId) && isValidCloudTransactionLog(request.resource.data, userId);
+        allow update: if isOwner(userId) && isValidCloudTransactionLog(request.resource.data, userId);
+        allow delete: if isOwner(userId);
+      }
+    }
+  }
+}

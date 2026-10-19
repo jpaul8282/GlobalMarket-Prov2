@@ -1,0 +1,100 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User account profile for authenticated owners and merchants",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Authenticated Firebase user ID" },
+        "fullName": { "type": "string", "description": "Full display name" },
+        "email": { "type": "string", "description": "User email address" },
+        "role": { "type": "string", "description": "Role in global market (e.g. OWNER, CASHIER, MANAGER)" },
+        "organization": { "type": "string", "description": "Store or merchant business name" },
+        "orgId": { "type": "string", "description": "Unique identifier for organization" },
+        "country": { "type": "string", "description": "ISO country code or country name" },
+        "currency": { "type": "string", "description": "Default business currency (e.g. USD, EUR)" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp via serverTimestamp()" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Last update timestamp via serverTimestamp()" }
+      },
+      "required": ["userId", "fullName", "email", "createdAt", "updatedAt"]
+    },
+    "PayoutSetting": {
+      "title": "PayoutSetting",
+      "description": "Configured disbursement rails and payment destinations for the store owner",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Authenticated store owner ID" },
+        "selectedMethod": { "type": "string", "enum": ["BANK_WIRE", "PAYPAL"], "description": "Active payout rail" },
+        "bankName": { "type": "string", "description": "Bank organization name" },
+        "accountHolderName": { "type": "string", "description": "Name on bank wire account" },
+        "accountNumberOrIban": { "type": "string", "description": "IBAN or account number" },
+        "swiftBic": { "type": "string", "description": "SWIFT or BIC identifier" },
+        "routingNumber": { "type": "string", "description": "Interbank routing code" },
+        "intermediaryBank": { "type": "string", "description": "Optional intermediary bank name" },
+        "paypalEmailOrId": { "type": "string", "description": "PayPal account email or account ID" },
+        "recipientName": { "type": "string", "description": "PayPal recipient full name" },
+        "phoneOrPaypalMe": { "type": "string", "description": "PayPal.Me handle or phone" },
+        "accountType": { "type": "string", "description": "Business or Personal" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp via serverTimestamp()" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Last update timestamp via serverTimestamp()" }
+      },
+      "required": ["userId", "selectedMethod", "createdAt", "updatedAt"]
+    },
+    "OwnerPayoutRecord": {
+      "title": "OwnerPayoutRecord",
+      "description": "Recorded disbursement settlement dispatched to the store owner",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Owner UID who initiated disbursement" },
+        "payoutId": { "type": "string", "description": "Unique UUID/ID for payout" },
+        "method": { "type": "string", "enum": ["BANK_WIRE", "PAYPAL"], "description": "Payout rail used" },
+        "amount": { "type": "number", "description": "Gross payout amount" },
+        "fee": { "type": "number", "description": "Disbursement rail fee" },
+        "netAmount": { "type": "number", "description": "Net disbursed amount after rail fees" },
+        "currency": { "type": "string", "description": "Currency code" },
+        "recipientName": { "type": "string", "description": "Target recipient name" },
+        "destinationSummary": { "type": "string", "description": "Masked IBAN or PayPal email" },
+        "reference": { "type": "string", "description": "Wire SWIFT reference or PayPal TX ID" },
+        "status": { "type": "string", "enum": ["PENDING", "PROCESSING", "COMPLETED", "SETTLED"], "description": "Settlement lifecycle state" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Disbursement timestamp via serverTimestamp()" }
+      },
+      "required": ["userId", "payoutId", "method", "amount", "fee", "netAmount", "currency", "recipientName", "reference", "status", "createdAt"]
+    },
+    "CloudTransactionLog": {
+      "title": "CloudTransactionLog",
+      "description": "Cloud synchronized audit ledger log for transactions, scanner entries, and payments",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Store owner UID" },
+        "logId": { "type": "string", "description": "Unique log record ID" },
+        "logType": { "type": "string", "enum": ["PAYMENT", "SCANNED_ITEM", "PAYOUT", "WEB_CHECKOUT"], "description": "Type of event" },
+        "title": { "type": "string", "description": "Transaction title or scanned product" },
+        "amount": { "type": "number", "description": "Amount in currency" },
+        "currencyCode": { "type": "string", "description": "Currency code" },
+        "referenceCode": { "type": "string", "description": "Reference identifier" },
+        "customerOrRecipient": { "type": "string", "description": "Customer name or payout destination" },
+        "status": { "type": "string", "description": "Transaction status" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Timestamp via serverTimestamp()" }
+      },
+      "required": ["userId", "logId", "logType", "title", "amount", "currencyCode", "referenceCode", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "Authenticated store owner profile"
+    },
+    "/users/{userId}/payout_settings/{settingId}": {
+      "schema": "PayoutSetting",
+      "description": "Configured payout rails and destination accounts for the owner"
+    },
+    "/users/{userId}/payouts/{payoutId}": {
+      "schema": "OwnerPayoutRecord",
+      "description": "Disbursement ledger history for owner settlements"
+    },
+    "/users/{userId}/transaction_logs/{logId}": {
+      "schema": "CloudTransactionLog",
+      "description": "Cloud synced activity logs and payment events"
+    }
+  }
+}

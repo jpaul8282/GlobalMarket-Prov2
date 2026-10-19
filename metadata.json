@@ -1,0 +1,6 @@
+{
+  "name": "GlobalMarket Pro",
+  "description": "Global sales terminal and localized payment simulator.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
