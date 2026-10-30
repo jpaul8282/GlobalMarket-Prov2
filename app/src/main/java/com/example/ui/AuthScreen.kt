@@ -74,8 +74,6 @@ import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential.Companion.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.GoogleAuthProvider
-import com.google.firebase.auth.ktx.auth
-import com.google.firebase.ktx.Firebase
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
@@ -109,7 +107,7 @@ fun onGoogleSignInClicked(
             if (credential is CustomCredential && credential.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
                 val googleIdToken = GoogleIdTokenCredential.createFrom(credential.data).idToken
                 val authCredential = GoogleAuthProvider.getCredential(googleIdToken, null)
-                Firebase.auth.signInWithCredential(authCredential).await()
+                FirebaseAuth.getInstance().signInWithCredential(authCredential).await()
                 onAuthSuccess()
             } else {
                 onAuthError("Unexpected credential type: ${credential::class.java.simpleName}")
@@ -131,7 +129,7 @@ fun attemptAutoSignIn(
     onUnauthenticated: () -> Unit,
     scope: CoroutineScope
 ) {
-    if (Firebase.auth.currentUser != null) {
+    if (FirebaseAuth.getInstance().currentUser != null) {
         onAuthSuccess()
         return
     }
@@ -157,7 +155,7 @@ fun attemptAutoSignIn(
             if (credential is CustomCredential && credential.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
                 val googleIdToken = GoogleIdTokenCredential.createFrom(credential.data).idToken
                 val authCredential = GoogleAuthProvider.getCredential(googleIdToken, null)
-                Firebase.auth.signInWithCredential(authCredential).await()
+                FirebaseAuth.getInstance().signInWithCredential(authCredential).await()
                 onAuthSuccess()
             } else {
                 onUnauthenticated()
@@ -174,7 +172,7 @@ fun signOutUser(
     onSignOutComplete: () -> Unit,
     scope: CoroutineScope
 ) {
-    Firebase.auth.signOut()
+    FirebaseAuth.getInstance().signOut()
     scope.launch {
         try {
             credentialManager.clearCredentialState(ClearCredentialStateRequest())

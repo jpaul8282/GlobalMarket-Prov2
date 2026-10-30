@@ -92,13 +92,13 @@ enum class PayoutMethodType(val id: String, val displayName: String, val subtitl
 }
 
 data class BankWireDetails(
-    val bankName: String = "JPMorgan Chase Bank, N.A.",
-    val accountHolderName: String = "Jurgen-Paul Westerveld",
-    val accountNumberOrIban: String = "US89CHAS021000021482019",
-    val swiftBic: String = "CHASUS33XXX",
-    val routingNumber: String = "021000021",
-    val country: String = "United States",
-    val intermediaryBank: String = "Federal Reserve Bank NY"
+    val bankName: String = "ING Bank N.V.",
+    val accountHolderName: String = "J.P. Westerveld",
+    val accountNumberOrIban: String = "NL43INGB0006372146",
+    val swiftBic: String = "INGBL2A",
+    val routingNumber: String = "INGBL2A",
+    val country: String = "Netherlands",
+    val intermediaryBank: String = "ING Bank Amsterdam (SEPA)"
 )
 
 data class PayPalDetails(

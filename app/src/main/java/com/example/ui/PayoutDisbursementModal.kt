@@ -445,12 +445,31 @@ fun PayoutDisbursementModal(
                                 modifier = Modifier.padding(16.dp),
                                 verticalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
-                                Text(
-                                    text = "BANK WIRE DETAILS",
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = CleanPrimary
-                                )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "BANK WIRE DETAILS (ING BANK N.V.)",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = CleanPrimary
+                                    )
+                                    Surface(
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = CleanSuccessContainer,
+                                        border = BorderStroke(1.dp, CleanSuccess.copy(alpha = 0.4f))
+                                    ) {
+                                        Text(
+                                            text = "LIVE NL SEPA",
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = CleanSuccess,
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
 
                                 OutlinedTextField(
                                     value = accountHolder,

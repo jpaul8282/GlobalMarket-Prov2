@@ -61,9 +61,7 @@ import com.example.ui.AppLanguage
 import com.example.ui.AuthScreen
 import com.example.ui.signOutUser
 import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.auth.ktx.auth
 import com.google.firebase.firestore.FirebaseFirestore
-import com.google.firebase.ktx.Firebase
 import androidx.credentials.CredentialManager
 import com.example.ui.BarcodeScannerModal
 import com.example.ui.CurrencyInfo
@@ -118,22 +116,23 @@ class MainActivity : ComponentActivity() {
         val firestoreRepository = firestoreDb?.let { FirestoreRepository(it) }
 
         setContent {
-            var currentUser by remember { mutableStateOf(Firebase.auth.currentUser) }
+            val firebaseAuth = remember { FirebaseAuth.getInstance() }
+            var currentUser by remember { mutableStateOf(firebaseAuth.currentUser) }
 
             DisposableEffect(Unit) {
                 val listener = FirebaseAuth.AuthStateListener { auth ->
                     currentUser = auth.currentUser
                 }
-                Firebase.auth.addAuthStateListener(listener)
+                firebaseAuth.addAuthStateListener(listener)
                 onDispose {
-                    Firebase.auth.removeAuthStateListener(listener)
+                    firebaseAuth.removeAuthStateListener(listener)
                 }
             }
 
             MyApplicationTheme {
                 if (currentUser == null) {
                     AuthScreen(
-                        onAuthSuccess = { currentUser = Firebase.auth.currentUser }
+                        onAuthSuccess = { currentUser = firebaseAuth.currentUser }
                     )
                 } else {
                     val viewModel: GlobalMarketViewModel = viewModel(
@@ -2267,7 +2266,7 @@ fun EnhancedAccountSettingsView(
                                 )
                                 Text(
                                     text = if (payoutConfig.selectedMethod == PayoutMethodType.BANK_WIRE) {
-                                        "IBAN: ••••${payoutConfig.bankWire.accountNumberOrIban.takeLast(6)} • SWIFT: ${payoutConfig.bankWire.swiftBic}"
+                                        "IBAN: ${payoutConfig.bankWire.accountNumberOrIban} • BIC: ${payoutConfig.bankWire.swiftBic}"
                                     } else {
                                         "PayPal ID: ${payoutConfig.payPal.phoneOrPaypalMe} • Instant Transfer"
                                     },

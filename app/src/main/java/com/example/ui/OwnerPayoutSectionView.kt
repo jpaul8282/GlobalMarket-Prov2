@@ -328,6 +328,294 @@ fun OwnerPayoutSectionView(
             }
         }
 
+        // 2B. OWNER LIVE BANK ACCOUNT (ING BANK NETHERLANDS)
+        item {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("owner_ing_bank_live_card"),
+                shape = RoundedCornerShape(22.dp),
+                colors = CardDefaults.cardColors(containerColor = CleanSurface),
+                border = BorderStroke(1.5.dp, CleanOrange.copy(alpha = 0.5f)),
+                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    // Header row with ING branding & Live status badge
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .clip(CircleShape)
+                                    .background(CleanOrangeContainer),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.AccountBalance,
+                                    contentDescription = "ING Bank",
+                                    tint = CleanOrange,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+                            Column {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Text(
+                                        text = payoutConfig.bankWire.bankName,
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = CleanTextPrimary
+                                    )
+                                    Text(text = "🇳🇱", fontSize = 14.sp)
+                                }
+                                Text(
+                                    text = "Owner Primary Bank Account",
+                                    fontSize = 11.sp,
+                                    color = CleanTextSecondary
+                                )
+                            }
+                        }
+
+                        // Live connected badge
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = CleanSuccessContainer,
+                            border = BorderStroke(1.dp, CleanSuccess.copy(alpha = 0.4f))
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(6.dp)
+                                        .clip(CircleShape)
+                                        .background(CleanSuccess)
+                                )
+                                Text(
+                                    text = "LIVE CONNECTED",
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = CleanSuccess,
+                                    letterSpacing = 0.5.sp
+                                )
+                            }
+                        }
+                    }
+
+                    HorizontalDivider(color = CleanBorderSubtle)
+
+                    // Account Details Grid (Holder, IBAN, BIC)
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        // Account Holder
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("Account Holder", fontSize = 11.sp, color = CleanTextMuted)
+                            Text(
+                                text = payoutConfig.bankWire.accountHolderName,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = CleanTextPrimary
+                            )
+                        }
+
+                        // IBAN with Copy
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = CleanSurfaceVariant,
+                            border = BorderStroke(1.dp, CleanBorderSubtle),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column {
+                                    Text(
+                                        text = "IBAN (NETHERLANDS)",
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = CleanTextMuted,
+                                        letterSpacing = 0.5.sp
+                                    )
+                                    Text(
+                                        text = payoutConfig.bankWire.accountNumberOrIban,
+                                        fontSize = 13.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                        fontWeight = FontWeight.Bold,
+                                        color = CleanTextPrimary
+                                    )
+                                }
+                                IconButton(
+                                    onClick = {
+                                        clipboardManager.setText(AnnotatedString(payoutConfig.bankWire.accountNumberOrIban))
+                                        Toast.makeText(context, "IBAN copied to clipboard!", Toast.LENGTH_SHORT).show()
+                                    },
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.ContentCopy,
+                                        contentDescription = "Copy IBAN",
+                                        tint = CleanPrimary,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            }
+                        }
+
+                        // BIC / SWIFT with Copy & Clearing
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = CleanSurfaceVariant,
+                                border = BorderStroke(1.dp, CleanBorderSubtle),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column {
+                                        Text(
+                                            text = "BIC / SWIFT",
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = CleanTextMuted,
+                                            letterSpacing = 0.5.sp
+                                        )
+                                        Text(
+                                            text = payoutConfig.bankWire.swiftBic,
+                                            fontSize = 13.sp,
+                                            fontFamily = FontFamily.Monospace,
+                                            fontWeight = FontWeight.Bold,
+                                            color = CleanTextPrimary
+                                        )
+                                    }
+                                    IconButton(
+                                        onClick = {
+                                            clipboardManager.setText(AnnotatedString(payoutConfig.bankWire.swiftBic))
+                                            Toast.makeText(context, "BIC copied to clipboard!", Toast.LENGTH_SHORT).show()
+                                        },
+                                        modifier = Modifier.size(28.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.ContentCopy,
+                                            contentDescription = "Copy BIC",
+                                            tint = CleanPrimary,
+                                            modifier = Modifier.size(14.dp)
+                                        )
+                                    }
+                                }
+                            }
+
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = CleanSurfaceVariant,
+                                border = BorderStroke(1.dp, CleanBorderSubtle),
+                                modifier = Modifier.weight(0.9f)
+                            ) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                                ) {
+                                    Text(
+                                        text = "CLEARING / SEPA",
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = CleanTextMuted,
+                                        letterSpacing = 0.5.sp
+                                    )
+                                    Text(
+                                        text = "SEPA / iDEAL Wire",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = CleanTextPrimary
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // Quick Action: Pre-fill & switch to Wire or Disburse
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Button(
+                            onClick = {
+                                activeMethod = PayoutMethodType.BANK_WIRE
+                                viewModel.selectPayoutMethod(PayoutMethodType.BANK_WIRE)
+                                if (availablePayoutBalanceUsd > 0.0) {
+                                    payoutAmountInput = String.format(Locale.US, "%.2f", availablePayoutBalanceUsd)
+                                }
+                                Toast.makeText(context, "Selected ING Bank (${payoutConfig.bankWire.accountNumberOrIban})", Toast.LENGTH_SHORT).show()
+                            },
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(44.dp),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = CleanOrange,
+                                contentColor = Color.White
+                            )
+                        ) {
+                            Icon(imageVector = Icons.Default.FlashOn, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Disburse to ING Live",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+
+                        OutlinedButton(
+                            onClick = { showEditCredentialsDialog = true },
+                            modifier = Modifier.height(44.dp),
+                            shape = RoundedCornerShape(12.dp),
+                            border = BorderStroke(1.dp, CleanBorder)
+                        ) {
+                            Icon(imageVector = Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(14.dp), tint = CleanTextSecondary)
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = "Edit",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = CleanTextPrimary
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
         // 3. SUCCESS BANNER (IF DISBURSED)
         if (lastSuccessRef != null) {
             item {
@@ -581,7 +869,7 @@ fun OwnerPayoutSectionView(
                                 )
                                 Text(
                                     text = if (activeMethod == PayoutMethodType.BANK_WIRE) {
-                                        "IBAN: ••••${payoutConfig.bankWire.accountNumberOrIban.takeLast(6)} • SWIFT: ${payoutConfig.bankWire.swiftBic}"
+                                        "IBAN: ${payoutConfig.bankWire.accountNumberOrIban} • BIC: ${payoutConfig.bankWire.swiftBic}"
                                     } else {
                                         "Recipient: ${payoutConfig.payPal.recipientName} • ${payoutConfig.payPal.phoneOrPaypalMe}"
                                     },
