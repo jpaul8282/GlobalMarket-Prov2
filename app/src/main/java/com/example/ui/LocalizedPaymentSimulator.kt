@@ -43,6 +43,7 @@ import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CreditCard
+import androidx.compose.material.icons.filled.CurrencyExchange
 import androidx.compose.material.icons.filled.FlashOn
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Payments
@@ -236,29 +237,51 @@ fun LocalizedPaymentSimulator(
                     )
                 }
 
-                // Live Rates Refresh Button
-                IconButton(
-                    onClick = { viewModel.refreshExchangeRates() },
-                    modifier = Modifier
-                        .size(36.dp)
-                        .clip(CircleShape)
-                        .background(CleanSurfaceVariant)
-                        .border(BorderStroke(1.dp, CleanBorder), CircleShape)
-                        .testTag("simulator_refresh_rates_button")
+                // Actions: Full Real-Time Converter Modal & Live Refresh
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    if (isRateRefreshing) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(16.dp),
-                            strokeWidth = 2.dp,
-                            color = CleanPrimary
-                        )
-                    } else {
+                    IconButton(
+                        onClick = { viewModel.openCurrencyConverterModal() },
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .background(CleanPrimaryContainer)
+                            .border(BorderStroke(1.dp, CleanBorder), CircleShape)
+                            .testTag("simulator_open_full_converter_btn")
+                    ) {
                         Icon(
-                            imageVector = Icons.Default.Refresh,
-                            contentDescription = "Refresh Live Exchange Rates",
+                            imageVector = Icons.Default.CurrencyExchange,
+                            contentDescription = "Open Full Converter",
                             tint = CleanPrimary,
                             modifier = Modifier.size(18.dp)
                         )
+                    }
+
+                    IconButton(
+                        onClick = { viewModel.refreshExchangeRates() },
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .background(CleanSurfaceVariant)
+                            .border(BorderStroke(1.dp, CleanBorder), CircleShape)
+                            .testTag("simulator_refresh_rates_button")
+                    ) {
+                        if (isRateRefreshing) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
+                                color = CleanPrimary
+                            )
+                        } else {
+                            Icon(
+                                imageVector = Icons.Default.Refresh,
+                                contentDescription = "Refresh Live Exchange Rates",
+                                tint = CleanPrimary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
                     }
                 }
             }

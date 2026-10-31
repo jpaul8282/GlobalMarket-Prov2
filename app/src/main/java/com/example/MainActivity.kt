@@ -75,6 +75,7 @@ import com.example.ui.PayoutDisbursementModal
 import com.example.ui.PayoutMethodType
 import com.example.ui.QrPaymentDialog
 import com.example.ui.RealTimeCurrencyConversionTool
+import com.example.ui.RealTimeCurrencyConverterModal
 import com.example.ui.TransactionSummaryScreen
 import com.example.ui.UserProfile
 import com.example.ui.theme.*
@@ -147,6 +148,7 @@ class MainActivity : ComponentActivity() {
                     val isWebCheckoutOpen by viewModel.isWebCheckoutOpen.collectAsStateWithLifecycle()
                     val isPayoutModalOpen by viewModel.isPayoutModalOpen.collectAsStateWithLifecycle()
                     val isOwnerPayoutScreenOpen by viewModel.isOwnerPayoutScreenOpen.collectAsStateWithLifecycle()
+                    val isCurrencyConverterModalOpen by viewModel.isCurrencyConverterModalOpen.collectAsStateWithLifecycle()
                     val deepLinkBanner by viewModel.deepLinkBanner.collectAsStateWithLifecycle()
 
                     // Handle incoming deep link when launched from external URL or intent
@@ -290,6 +292,13 @@ class MainActivity : ComponentActivity() {
                                 onBack = { viewModel.closeOwnerPayoutSection() }
                             )
                         }
+                    }
+
+                    if (isCurrencyConverterModalOpen) {
+                        RealTimeCurrencyConverterModal(
+                            viewModel = viewModel,
+                            onDismiss = { viewModel.closeCurrencyConverterModal() }
+                        )
                     }
                 }
             }
@@ -489,6 +498,29 @@ fun GlobalMarketDashboard(
                                 imageVector = Icons.Default.Share,
                                 contentDescription = "Share Marketing Campaign",
                                 tint = CleanOnPrimaryContainer,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+
+                    // Quick Real-Time Currency Converter Button
+                    Surface(
+                        onClick = { viewModel.openCurrencyConverterModal() },
+                        shape = CircleShape,
+                        color = CleanPrimaryContainer,
+                        border = BorderStroke(1.dp, CleanBorderSubtle),
+                        modifier = Modifier.testTag("header_currency_converter_btn")
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(38.dp)
+                                .padding(8.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.CurrencyExchange,
+                                contentDescription = "Real-Time Currency Converter",
+                                tint = CleanPrimary,
                                 modifier = Modifier.size(18.dp)
                             )
                         }

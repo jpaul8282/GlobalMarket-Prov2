@@ -641,6 +641,17 @@ class GlobalMarketViewModel(
     private val _isSimulatorModalOpen = MutableStateFlow(false)
     val isSimulatorModalOpen: StateFlow<Boolean> = _isSimulatorModalOpen.asStateFlow()
 
+    private val _isCurrencyConverterModalOpen = MutableStateFlow(false)
+    val isCurrencyConverterModalOpen: StateFlow<Boolean> = _isCurrencyConverterModalOpen.asStateFlow()
+
+    fun openCurrencyConverterModal() {
+        _isCurrencyConverterModalOpen.value = true
+    }
+
+    fun closeCurrencyConverterModal() {
+        _isCurrencyConverterModalOpen.value = false
+    }
+
     private val _simulatorCustomerName = MutableStateFlow("Elena Rostova")
     val simulatorCustomerName: StateFlow<String> = _simulatorCustomerName.asStateFlow()
 
@@ -2091,29 +2102,25 @@ class GlobalMarketViewModel(
         }
     }
 
-    fun refreshExchangeRates() {
+    fun refreshExchangeRates(baseCurrency: String = "USD") {
         viewModelScope.launch {
             _isRateRefreshing.value = true
             try {
-                // Attempt Retrofit API call with graceful fallback
-                val response = try {
-                    com.example.data.ExchangeRateClient.api.getLatestRates("USD")
-                } catch (e: Exception) {
-                    null
-                }
+                // Attempt Retrofit live API call with graceful offline cross-rate fallback
+                val (fetchedRates, isOnline) = com.example.data.ExchangeRateClient.fetchRates(baseCurrency)
 
                 val newRateMap = mutableMapOf<String, Double>()
                 val newChangeMap = mutableMapOf<String, Double>()
                 val now = System.currentTimeMillis()
 
                 currencies.forEach { c ->
-                    val apiRate = response?.rates?.get(c.code)
+                    val apiRate = fetchedRates[c.code]
                     val effectiveRate = if (apiRate != null && apiRate > 0.0) {
                         apiRate
                     } else {
                         // Subtle tick fluctuation (-0.15% to +0.15%)
                         val jitterPercent = ((-15..15).random()) / 10000.0
-                        val baseline = com.example.data.ExchangeRateClient.baselineRates[c.code] ?: c.exchangeRate
+                        val baseline = com.example.data.ExchangeRateClient.calculateBaselineRatesForBase(baseCurrency)[c.code] ?: c.exchangeRate
                         baseline * (1.0 + jitterPercent)
                     }
                     val roundedRate = Math.round(effectiveRate * 10000.0) / 10000.0

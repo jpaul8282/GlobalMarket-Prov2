@@ -75,4 +75,31 @@ object ExchangeRateClient {
         "BRL" to 5.45,
         "MXN" to 18.20
     )
+
+    /**
+     * Attempts to fetch live rates from the API for the requested base currency,
+     * falling back to offline cross-currency calculated rates if network is unavailable.
+     */
+    suspend fun fetchRates(baseCurrency: String = "USD"): Pair<Map<String, Double>, Boolean> {
+        return try {
+            val response = api.getLatestRates(baseCurrency)
+            if (response.rates.isNotEmpty()) {
+                Pair(response.rates, true)
+            } else {
+                Pair(calculateBaselineRatesForBase(baseCurrency), false)
+            }
+        } catch (e: Exception) {
+            Pair(calculateBaselineRatesForBase(baseCurrency), false)
+        }
+    }
+
+    /**
+     * Computes cross rates for any base currency relative to USD.
+     */
+    fun calculateBaselineRatesForBase(baseCurrency: String): Map<String, Double> {
+        val baseToUsd = baselineRates[baseCurrency] ?: 1.0
+        return baselineRates.mapValues { (_, rateToUsd) ->
+            Math.round((rateToUsd / baseToUsd) * 10000.0) / 10000.0
+        }
+    }
 }

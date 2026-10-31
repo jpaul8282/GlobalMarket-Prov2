@@ -616,6 +616,47 @@ fun OwnerPayoutSectionView(
             }
         }
 
+        // 2C. LIVE VIEW & ACTIONS TELEMETRY PANEL
+        item {
+            OwnerPayoutLiveTelemetryView(
+                viewModel = viewModel,
+                availableBalanceUsd = availablePayoutBalanceUsd,
+                payoutConfig = payoutConfig,
+                currencyFormatter = currencyFormatter,
+                onQuickAmountSelected = { amountStr ->
+                    payoutAmountInput = amountStr
+                    activeMethod = PayoutMethodType.BANK_WIRE
+                    viewModel.selectPayoutMethod(PayoutMethodType.BANK_WIRE)
+                },
+                onInstantDisburseRequested = { fullAmount ->
+                    activeMethod = PayoutMethodType.BANK_WIRE
+                    viewModel.selectPayoutMethod(PayoutMethodType.BANK_WIRE)
+                    payoutAmountInput = String.format(Locale.US, "%.2f", fullAmount)
+                    isDisbursing = true
+                    scope.launch {
+                        delay(500)
+                        viewModel.disbursePayout(
+                            method = PayoutMethodType.BANK_WIRE,
+                            amountInUsd = fullAmount,
+                            currencyCode = selectedPayoutCurrency.code,
+                            recipientName = payoutConfig.bankWire.accountHolderName,
+                            destinationIdentifier = payoutConfig.bankWire.accountNumberOrIban,
+                            notes = "Instant live vault settlement to ${payoutConfig.bankWire.bankName} (${payoutConfig.bankWire.swiftBic})",
+                            onSuccess = {
+                                lastSuccessRef = viewModel.lastDisbursedPayoutReference.value ?: "PO-LIVE-SETTLED"
+                                isDisbursing = false
+                                Toast.makeText(
+                                    context,
+                                    "Disbursed $${String.format(Locale.US, "%.2f", fullAmount)} to ING Bank Live!",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }
+                        )
+                    }
+                }
+            )
+        }
+
         // 3. SUCCESS BANNER (IF DISBURSED)
         if (lastSuccessRef != null) {
             item {
