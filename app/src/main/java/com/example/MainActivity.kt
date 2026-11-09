@@ -66,6 +66,7 @@ import androidx.credentials.CredentialManager
 import com.example.ui.BarcodeScannerModal
 import com.example.ui.CurrencyInfo
 import com.example.ui.GlabaWebCheckoutModal
+import com.example.ui.GlabaPartnerJoinModal
 import com.example.ui.GlobalMarketViewModel
 import com.example.ui.GlobalMarketViewModelFactory
 import com.example.ui.LocalizedPaymentSimulator
@@ -146,6 +147,7 @@ class MainActivity : ComponentActivity() {
                     val selectedCampaign by viewModel.selectedCampaign.collectAsStateWithLifecycle()
                     val isBarcodeScannerOpen by viewModel.isBarcodeScannerOpen.collectAsStateWithLifecycle()
                     val isWebCheckoutOpen by viewModel.isWebCheckoutOpen.collectAsStateWithLifecycle()
+                    val isPartnerJoinOpen by viewModel.isPartnerJoinOpen.collectAsStateWithLifecycle()
                     val isPayoutModalOpen by viewModel.isPayoutModalOpen.collectAsStateWithLifecycle()
                     val isOwnerPayoutScreenOpen by viewModel.isOwnerPayoutScreenOpen.collectAsStateWithLifecycle()
                     val isCurrencyConverterModalOpen by viewModel.isCurrencyConverterModalOpen.collectAsStateWithLifecycle()
@@ -227,10 +229,21 @@ class MainActivity : ComponentActivity() {
 
                                         Row(verticalAlignment = Alignment.CenterVertically) {
                                             TextButton(
-                                                onClick = { viewModel.openWebCheckout() },
+                                                onClick = {
+                                                    if (deepLinkBanner?.contains("Partner", ignoreCase = true) == true) {
+                                                        viewModel.openPartnerJoin()
+                                                    } else {
+                                                        viewModel.openWebCheckout()
+                                                    }
+                                                },
                                                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
                                             ) {
-                                                Text("View Checkout", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = CleanPrimary)
+                                                Text(
+                                                    text = if (deepLinkBanner?.contains("Partner", ignoreCase = true) == true) "Open Partner Page" else "View Checkout",
+                                                    fontSize = 12.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = CleanPrimary
+                                                )
                                             }
                                             IconButton(
                                                 onClick = { viewModel.clearDeepLinkBanner() },
@@ -269,6 +282,13 @@ class MainActivity : ComponentActivity() {
                         GlabaWebCheckoutModal(
                             viewModel = viewModel,
                             onDismiss = { viewModel.closeWebCheckout() }
+                        )
+                    }
+
+                    if (isPartnerJoinOpen) {
+                        GlabaPartnerJoinModal(
+                            viewModel = viewModel,
+                            onDismiss = { viewModel.closePartnerJoin() }
                         )
                     }
 
@@ -803,7 +823,11 @@ fun GlobalMarketDashboard(
                             ) {
                                 IconButton(
                                     onClick = {
-                                        viewModel.openWebCheckout(defaultCampaign.shortUrl)
+                                        if (defaultCampaign.shortUrl.contains("/join", ignoreCase = true)) {
+                                            viewModel.openPartnerJoin(defaultCampaign.shortUrl)
+                                        } else {
+                                            viewModel.openWebCheckout(defaultCampaign.shortUrl)
+                                        }
                                     },
                                     modifier = Modifier.size(32.dp)
                                 ) {
@@ -894,6 +918,145 @@ fun GlobalMarketDashboard(
                                 fontWeight = FontWeight.SemiBold,
                                 fontSize = 12.sp
                             )
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3.5. DEDICATED VIP PARTNER ONBOARDING SHOWCASE CARD (glaba.pro/join/JPWESTERVELD?deal=PARTNER25)
+        item {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(20.dp),
+                color = CleanPrimaryContainer,
+                border = BorderStroke(1.5.dp, CleanPrimary.copy(alpha = 0.4f)),
+                shadowElevation = 2.dp
+            ) {
+                Column(
+                    modifier = Modifier.padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(CircleShape)
+                                    .background(CleanPrimary),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "JP",
+                                    color = Color.White,
+                                    fontWeight = FontWeight.Black,
+                                    fontSize = 13.sp
+                                )
+                            }
+
+                            Column {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Text(
+                                        text = "VIP Partner Onboarding Page",
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = CleanTextPrimary
+                                    )
+                                    Surface(shape = RoundedCornerShape(4.dp), color = CleanOrange) {
+                                        Text(
+                                            text = "DEAL: PARTNER25",
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.Black,
+                                            color = Color.White,
+                                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
+                                Text(
+                                    text = "Invited by Jurgen-Paul Westerveld • 25% Fee Discount",
+                                    fontSize = 11.sp,
+                                    color = CleanTextSecondary
+                                )
+                            }
+                        }
+                    }
+
+                    // URL Strip
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(10.dp),
+                        color = CleanSurface,
+                        border = BorderStroke(1.dp, CleanBorder)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = "https://glaba.pro/join/JPWESTERVELD?deal=PARTNER25",
+                                fontSize = 11.sp,
+                                fontFamily = FontFamily.Monospace,
+                                color = CleanPrimary,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Icon(
+                                imageVector = Icons.Default.Lock,
+                                contentDescription = null,
+                                tint = CleanSuccess,
+                                modifier = Modifier.size(13.dp)
+                            )
+                        }
+                    }
+
+                    // Action Buttons
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Button(
+                            onClick = { viewModel.openPartnerJoin("https://glaba.pro/join/JPWESTERVELD?deal=PARTNER25") },
+                            modifier = Modifier.weight(1.3f).height(40.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = CleanPrimary),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Icon(imageVector = Icons.Default.Launch, contentDescription = null, modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(text = "Open Partner Page", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+
+                        OutlinedButton(
+                            onClick = {
+                                copyToClipboard(
+                                    context = context,
+                                    label = "Partner URL",
+                                    text = "https://glaba.pro/join/JPWESTERVELD?deal=PARTNER25",
+                                    toastMsg = "Partner link copied!"
+                                )
+                            },
+                            modifier = Modifier.weight(1f).height(40.dp),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = CleanPrimary),
+                            border = BorderStroke(1.dp, CleanPrimary)
+                        ) {
+                            Icon(imageVector = Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(text = "Copy Link", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                         }
                     }
                 }
@@ -1637,7 +1800,11 @@ fun MarketingShareHubModal(
                         label = "Preview",
                         color = CleanPrimary
                     ) {
-                        viewModel.openWebCheckout(selectedCampaign.shortUrl)
+                        if (selectedCampaign.shortUrl.contains("/join", ignoreCase = true)) {
+                            viewModel.openPartnerJoin(selectedCampaign.shortUrl)
+                        } else {
+                            viewModel.openWebCheckout(selectedCampaign.shortUrl)
+                        }
                     }
                 }
             }

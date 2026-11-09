@@ -4,15 +4,7 @@ import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
-import com.example.data.ExchangeRateClient
-import com.example.data.InventoryProductEntity
-import com.example.data.SalesTransactionEntity
-import com.example.data.ScannedProductEntity
-import com.example.data.TerminalTransactionLogEntity
-import com.example.data.TransactionEntity
-import com.example.data.TransactionHistoryEntity
-import com.example.data.TransactionLogEntity
-import com.example.data.TransactionRepository
+import com.example.data.*
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -21,6 +13,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import java.util.UUID
 
 enum class AppLanguage(val displayName: String, val flagUrl: String) {
     ENGLISH("English", "https://flagcdn.com/w20/us.png"),
@@ -106,6 +99,21 @@ data class PayPalDetails(
     val recipientName: String = "Jurgen-Paul Westerveld",
     val phoneOrPaypalMe: String = "paypal.me/jpwesterveld",
     val accountType: String = "Business Premier"
+)
+
+data class PartnerRegistrationEntity(
+    val id: String,
+    val businessName: String,
+    val contactName: String,
+    val email: String,
+    val country: String,
+    val iban: String,
+    val bic: String,
+    val dealCode: String,
+    val discountPercent: Int = 25,
+    val merchantId: String,
+    val apiKey: String,
+    val timestamp: Long = System.currentTimeMillis()
 )
 
 data class MerchantPayoutConfig(
@@ -867,8 +875,420 @@ class GlobalMarketViewModel(
     private val _deepLinkBanner = MutableStateFlow<String?>(null)
     val deepLinkBanner: StateFlow<String?> = _deepLinkBanner.asStateFlow()
 
+    // Dedicated VIP Partner Join Page State (https://glaba.pro/join/JPWESTERVELD?deal=PARTNER25)
+    private val _isPartnerJoinOpen = MutableStateFlow(false)
+    val isPartnerJoinOpen: StateFlow<Boolean> = _isPartnerJoinOpen.asStateFlow()
+
+    private val _partnerJoinUrl = MutableStateFlow("https://glaba.pro/join/JPWESTERVELD?deal=PARTNER25")
+    val partnerJoinUrl: StateFlow<String> = _partnerJoinUrl.asStateFlow()
+
+    private val _partnerReferralCode = MutableStateFlow("JPWESTERVELD")
+    val partnerReferralCode: StateFlow<String> = _partnerReferralCode.asStateFlow()
+
+    private val _partnerDealCode = MutableStateFlow("PARTNER25")
+    val partnerDealCode: StateFlow<String> = _partnerDealCode.asStateFlow()
+
+    private val _partnerDiscountPercent = MutableStateFlow(25)
+    val partnerDiscountPercent: StateFlow<Int> = _partnerDiscountPercent.asStateFlow()
+
+    private val _partnerHostName = MutableStateFlow("J.P. Westerveld")
+    val partnerHostName: StateFlow<String> = _partnerHostName.asStateFlow()
+
+    private val _partnerHostEmail = MutableStateFlow("westerveldjp@gmail.com")
+    val partnerHostEmail: StateFlow<String> = _partnerHostEmail.asStateFlow()
+
+    private val _partnerHostIban = MutableStateFlow("NL43INGB0006372146")
+    val partnerHostIban: StateFlow<String> = _partnerHostIban.asStateFlow()
+
+    private val _partnerHostBic = MutableStateFlow("INGBL2A")
+    val partnerHostBic: StateFlow<String> = _partnerHostBic.asStateFlow()
+
+    private val _registeredPartners = MutableStateFlow<List<PartnerRegistrationEntity>>(emptyList())
+    val registeredPartners: StateFlow<List<PartnerRegistrationEntity>> = _registeredPartners.asStateFlow()
+
+    // -----------------------------------------------------------------
+    // CYBER THREAT DEFENSE & AI SENTINEL STATE
+    // -----------------------------------------------------------------
+    private val _isSecurityDefenseModalOpen = MutableStateFlow(false)
+    val isSecurityDefenseModalOpen: StateFlow<Boolean> = _isSecurityDefenseModalOpen.asStateFlow()
+
+    private val _isAutonomousContainmentActive = MutableStateFlow(true)
+    val isAutonomousContainmentActive: StateFlow<Boolean> = _isAutonomousContainmentActive.asStateFlow()
+
+    private val _isSecurityScanningActive = MutableStateFlow(true)
+    val isSecurityScanningActive: StateFlow<Boolean> = _isSecurityScanningActive.asStateFlow()
+
+    private val _threatList = MutableStateFlow<List<SecurityThreat>>(
+        listOf(
+            SecurityThreat(
+                id = "THR-2026-991",
+                title = "Automated Carding Botnet Micro-Auth Burst",
+                category = ThreatCategory.CARDING_BOTNET,
+                severity = ThreatSeverity.CRITICAL,
+                aiRiskScore = 96,
+                confidencePercent = 99.4f,
+                sourceIp = "185.220.101.54",
+                sourceCountry = "Russia / TOR Exit Node",
+                countryFlag = "🇷🇺",
+                targetEndpoint = "/api/v2/checkout/authorize",
+                payloadExcerpt = "{\"pan\":\"4532********9912\",\"cvv\":\"***\",\"velocity_per_sec\":140,\"user_agent\":\"python-requests/2.31.0\"}",
+                status = ContainmentStatus.ACTIVE_THREAT,
+                detectedTimestamp = System.currentTimeMillis() - 120_000,
+                containmentAction = "Autonomous Global WAF Blacklist & Route Drop",
+                aiAssessmentSummary = "Detected 140 rapid micro-authorization attempts within 4.2 seconds across randomized BINs. Behavior matches automated card validation botnet. AI recommends instant edge IP block and temporary merchant token rate limit.",
+                blastRadiusExposure = "€42,800 simulated checkout attempts"
+            ),
+            SecurityThreat(
+                id = "THR-2026-884",
+                title = "WAF SQL Injection & Column Enumeration",
+                category = ThreatCategory.SQLI_WAF_BYPASS,
+                severity = ThreatSeverity.HIGH,
+                aiRiskScore = 88,
+                confidencePercent = 98.1f,
+                sourceIp = "194.26.29.112",
+                sourceCountry = "Bulgaria / Bulletproof VPS",
+                countryFlag = "🇧🇬",
+                targetEndpoint = "/pay?m=org_6RsNhnGbSQ3s7rFPAoYfQjA&code=GLOBAL15",
+                payloadExcerpt = "' UNION SELECT 1, cc_token, iban, balance FROM payment_vault-- -",
+                status = ContainmentStatus.CONTAINED_AUTO,
+                detectedTimestamp = System.currentTimeMillis() - 480_000,
+                containmentAction = "WAF Deep Packet Filter Drop",
+                aiAssessmentSummary = "Obfuscated union-based SQL injection attempt detected in HTTP GET promo parameter. WAF Signature Rule 4099 triggered and dropped request at Cloudflare edge with zero DB exposure.",
+                blastRadiusExposure = "Zero DB exposure (Edge Mitigated)"
+            ),
+            SecurityThreat(
+                id = "THR-2026-772",
+                title = "Unauthorized Payout Routing Divert",
+                category = ThreatCategory.PAYOUT_HIJACK,
+                severity = ThreatSeverity.CRITICAL,
+                aiRiskScore = 94,
+                confidencePercent = 99.1f,
+                sourceIp = "45.154.255.89",
+                sourceCountry = "Netherlands / Proxy VPN",
+                countryFlag = "🇳🇱",
+                targetEndpoint = "/api/v1/payout/disbursement/live",
+                payloadExcerpt = "{\"action\":\"UPDATE_BENEFICIARY\",\"target_iban\":\"DE89370400440532013000\",\"override_owner\":true}",
+                status = ContainmentStatus.PENDING_APPROVAL,
+                detectedTimestamp = System.currentTimeMillis() - 900_000,
+                containmentAction = "Payout Circuit Breaker Triggered (Awaiting Admin J.P. Westerveld Approval)",
+                aiAssessmentSummary = "Attempted modification of payout beneficiary away from owner's verified ING Bank N.V. account (NL43INGB0006372146). Discrepancy between session signature and token owner. Payout rails automatically frozen.",
+                blastRadiusExposure = "€18,450 pending payout disbursement protected"
+            ),
+            SecurityThreat(
+                id = "THR-2026-661",
+                title = "Credential Stuffing on Merchant Partner Portal",
+                category = ThreatCategory.CREDENTIAL_STUFFING,
+                severity = ThreatSeverity.MEDIUM,
+                aiRiskScore = 74,
+                confidencePercent = 95.8f,
+                sourceIp = "103.152.220.14",
+                sourceCountry = "Indonesia / Residential Proxy",
+                countryFlag = "🇮🇩",
+                targetEndpoint = "/join/JPWESTERVELD?deal=PARTNER25",
+                payloadExcerpt = "POST /api/v2/auth/login { \"email\": \"westerveldjp@gmail.com\", \"pass_attempt\": 42 }",
+                status = ContainmentStatus.CONTAINED_AUTO,
+                detectedTimestamp = System.currentTimeMillis() - 1_800_000,
+                containmentAction = "Adaptive Captcha Tripped & IP Throttled",
+                aiAssessmentSummary = "High velocity password enumeration against partner admin email. Adaptive biometric challenge enforced after 5th failed attempt. Origin IP throttled for 24 hours.",
+                blastRadiusExposure = "Zero unauthorized logins"
+            )
+        )
+    )
+    val threatList: StateFlow<List<SecurityThreat>> = _threatList.asStateFlow()
+
+    private val _firewallRules = MutableStateFlow<List<FirewallRuleStatus>>(
+        listOf(
+            FirewallRuleStatus(
+                ruleId = "WAF-SQLI-DEEP",
+                ruleName = "SQL Injection Deep Inspection",
+                description = "Inspects all query strings, headers, and JSON payloads for SQLi patterns",
+                scope = "Global Edge",
+                packetsInspected = 1845200L,
+                threatsBlocked = 3120,
+                isEnabled = true
+            ),
+            FirewallRuleStatus(
+                ruleId = "ANTI-DDOS-RATE",
+                ruleName = "L7 HTTP Request Rate Limiter",
+                description = "Restricts single IP rate to maximum 60 requests/minute",
+                scope = "Checkout API",
+                packetsInspected = 2419000L,
+                threatsBlocked = 8420,
+                isEnabled = true
+            ),
+            FirewallRuleStatus(
+                ruleId = "ZERO-DAY-SENTINEL",
+                ruleName = "AI Behavioral Anomaly Shield",
+                description = "Evaluates cross-endpoint session velocity with ML inference",
+                scope = "Global",
+                packetsInspected = 920000L,
+                threatsBlocked = 480,
+                isEnabled = true
+            ),
+            FirewallRuleStatus(
+                ruleId = "ING-PAYOUT-CIRCUIT",
+                ruleName = "Payout Beneficiary Pinning",
+                description = "Restricts SEPA automated disbursement changes to verified owner ING Bank NL43INGB0006372146",
+                scope = "Banking Rails",
+                packetsInspected = 14500L,
+                threatsBlocked = 14,
+                isEnabled = true
+            )
+        )
+    )
+    val firewallRules: StateFlow<List<FirewallRuleStatus>> = _firewallRules.asStateFlow()
+
+    private val _securityAuditLogs = MutableStateFlow<List<SecurityAuditLogEntry>>(
+        listOf(
+            SecurityAuditLogEntry(
+                id = "AUD-9901",
+                timestamp = System.currentTimeMillis() - 110_000,
+                eventType = "AUTONOMOUS_CONTAINMENT_TRIGGERED",
+                severity = ThreatSeverity.CRITICAL,
+                actor = "Edge Cloudflare WAF",
+                description = "Automated global null-route executed for 185.220.101.54 following carding velocity detection.",
+                cryptographicHash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                complianceTags = listOf("PCI-DSS §10.2", "SOC2-CC6.8")
+            ),
+            SecurityAuditLogEntry(
+                id = "AUD-9892",
+                timestamp = System.currentTimeMillis() - 890_000,
+                eventType = "PAYOUT_CIRCUIT_BREAKER_ENGAGED",
+                severity = ThreatSeverity.CRITICAL,
+                actor = "AI Sentinel Engine",
+                description = "Disbursement rerouting halted to preserve owner ING Bank N.V. NL43INGB0006372146 pending human approval.",
+                cryptographicHash = "a591a6d40bf420404a011733cfb7b190d62c65bf0bcda32b57b277d9ad9f146e",
+                complianceTags = listOf("PCI-DSS §10.2", "GDPR Art 32")
+            ),
+            SecurityAuditLogEntry(
+                id = "AUD-9875",
+                timestamp = System.currentTimeMillis() - 1_750_000,
+                eventType = "FIREWALL_POLICY_ENFORCED",
+                severity = ThreatSeverity.HIGH,
+                actor = "Admin: J.P. Westerveld",
+                description = "Verified owner session authorized strict token pin & adaptive captcha on partner affiliate endpoints.",
+                cryptographicHash = "c71d2b63047340a6b6571f75bf07517b3f28e2f42a5c08de570453ac39f711ac",
+                complianceTags = listOf("SOC2-CC6.8", "PCI-DSS §10.2")
+            )
+        )
+    )
+    val securityAuditLogs: StateFlow<List<SecurityAuditLogEntry>> = _securityAuditLogs.asStateFlow()
+
+    fun openSecurityDefenseModal() {
+        _isSecurityDefenseModalOpen.value = true
+    }
+
+    fun closeSecurityDefenseModal() {
+        _isSecurityDefenseModalOpen.value = false
+    }
+
+    fun toggleAutonomousContainment(enabled: Boolean) {
+        _isAutonomousContainmentActive.value = enabled
+        val log = SecurityAuditLogEntry(
+            id = "AUD-${System.currentTimeMillis().toString().takeLast(4)}",
+            timestamp = System.currentTimeMillis(),
+            eventType = if (enabled) "AUTONOMOUS_DEFENSE_ARMED" else "AUTONOMOUS_DEFENSE_DISARMED",
+            severity = ThreatSeverity.HIGH,
+            actor = "Admin: J.P. Westerveld",
+            description = if (enabled) "Autonomous mitigation matrix engaged globally." else "Autonomous mitigation disabled, manual review mode active.",
+            cryptographicHash = UUID.randomUUID().toString().replace("-", ""),
+            complianceTags = listOf("SOC2-CC6.8")
+        )
+        _securityAuditLogs.value = listOf(log) + _securityAuditLogs.value
+    }
+
+    fun toggleFirewallRule(ruleId: String, enabled: Boolean) {
+        _firewallRules.value = _firewallRules.value.map { rule ->
+            if (rule.ruleId == ruleId) rule.copy(isEnabled = enabled) else rule
+        }
+        val log = SecurityAuditLogEntry(
+            id = "AUD-${System.currentTimeMillis().toString().takeLast(4)}",
+            timestamp = System.currentTimeMillis(),
+            eventType = "FIREWALL_RULE_MODIFIED",
+            severity = ThreatSeverity.MEDIUM,
+            actor = "Admin: J.P. Westerveld",
+            description = "Rule $ruleId toggled: ${if (enabled) "ENABLED" else "DISABLED"}",
+            cryptographicHash = UUID.randomUUID().toString().replace("-", ""),
+            complianceTags = listOf("PCI-DSS §1.1")
+        )
+        _securityAuditLogs.value = listOf(log) + _securityAuditLogs.value
+    }
+
+    fun triggerLiveThreatScan() {
+        viewModelScope.launch {
+            _isSecurityScanningActive.value = true
+            delay(1200)
+            _isSecurityScanningActive.value = false
+        }
+    }
+
+    fun approveThreatContainment(threatId: String, approvedBy: String) {
+        viewModelScope.launch {
+            _threatList.value = _threatList.value.map { threat ->
+                if (threat.id == threatId) {
+                    threat.copy(
+                        status = ContainmentStatus.RESOLVED_APPROVED,
+                        humanApprovedBy = approvedBy,
+                        humanApprovalTimestamp = System.currentTimeMillis()
+                    )
+                } else threat
+            }
+
+            val log = SecurityAuditLogEntry(
+                id = "AUD-${System.currentTimeMillis().toString().takeLast(4)}",
+                timestamp = System.currentTimeMillis(),
+                eventType = "HUMAN_APPROVAL_ENFORCED",
+                severity = ThreatSeverity.HIGH,
+                actor = approvedBy,
+                description = "Quarantine confirmed for threat $threatId. Subnet dropped across global edge WAF.",
+                cryptographicHash = UUID.randomUUID().toString().replace("-", ""),
+                complianceTags = listOf("PCI-DSS §10.2", "GDPR Art 32", "SOC2-CC6.8")
+            )
+            _securityAuditLogs.value = listOf(log) + _securityAuditLogs.value
+        }
+    }
+
+    fun rejectThreat(threatId: String, approvedBy: String) {
+        viewModelScope.launch {
+            _threatList.value = _threatList.value.map { threat ->
+                if (threat.id == threatId) {
+                    threat.copy(
+                        status = ContainmentStatus.FALSE_POSITIVE,
+                        humanApprovedBy = approvedBy,
+                        humanApprovalTimestamp = System.currentTimeMillis()
+                    )
+                } else threat
+            }
+
+            val log = SecurityAuditLogEntry(
+                id = "AUD-${System.currentTimeMillis().toString().takeLast(4)}",
+                timestamp = System.currentTimeMillis(),
+                eventType = "FALSE_POSITIVE_WHITELISTED",
+                severity = ThreatSeverity.LOW,
+                actor = approvedBy,
+                description = "Threat $threatId marked as false positive by $approvedBy. Traffic unblocked.",
+                cryptographicHash = UUID.randomUUID().toString().replace("-", ""),
+                complianceTags = listOf("SOC2-CC6.8")
+            )
+            _securityAuditLogs.value = listOf(log) + _securityAuditLogs.value
+        }
+    }
+
+    fun triggerEmergencyLockdown() {
+        viewModelScope.launch {
+            _isAutonomousContainmentActive.value = true
+            _threatList.value = _threatList.value.map { threat ->
+                threat.copy(status = ContainmentStatus.CONTAINED_AUTO)
+            }
+            val log = SecurityAuditLogEntry(
+                id = "AUD-${System.currentTimeMillis().toString().takeLast(4)}",
+                timestamp = System.currentTimeMillis(),
+                eventType = "EMERGENCY_LOCKDOWN_EXECUTED",
+                severity = ThreatSeverity.CRITICAL,
+                actor = "Admin: J.P. Westerveld",
+                description = "EMERGENCY LOCKDOWN: All high-risk endpoints rate-limited to 0, session tokens invalidated, payout rails locked.",
+                cryptographicHash = UUID.randomUUID().toString().replace("-", ""),
+                complianceTags = listOf("PCI-DSS §12.10", "SOC2-CC7.4")
+            )
+            _securityAuditLogs.value = listOf(log) + _securityAuditLogs.value
+        }
+    }
+
+    fun generateSecurityAuditCsv(): String {
+        val sb = StringBuilder()
+        sb.append("LogID,Timestamp,EventType,Severity,Actor,Description,SHA256,ComplianceTags\n")
+        _securityAuditLogs.value.forEach { log ->
+            sb.append("${log.id},${log.timestamp},\"${log.eventType}\",${log.severity.label},\"${log.actor}\",\"${log.description.replace("\"", "\"\"")}\",${log.cryptographicHash},\"${log.complianceTags.joinToString(";")}\"\n")
+        }
+        return sb.toString()
+    }
+
+    fun openPartnerJoin(url: String? = null) {
+        val target = url ?: "https://glaba.pro/join/JPWESTERVELD?deal=PARTNER25"
+        _partnerJoinUrl.value = target
+        parsePartnerUrl(target)
+        _deepLinkBanner.value = "VIP Partner Invite: @JPWESTERVELD (Deal: PARTNER25 pre-applied)"
+        _isPartnerJoinOpen.value = true
+    }
+
+    fun closePartnerJoin() {
+        _isPartnerJoinOpen.value = false
+    }
+
+    fun parsePartnerUrl(url: String) {
+        try {
+            val uri = Uri.parse(url)
+            val path = uri.path ?: ""
+            if (path.contains("/join/")) {
+                val partnerSlug = path.substringAfter("/join/").substringBefore("/").substringBefore("?")
+                if (partnerSlug.isNotBlank()) {
+                    _partnerReferralCode.value = partnerSlug
+                }
+            }
+            val deal = uri.getQueryParameter("deal") ?: uri.getQueryParameter("code")
+            if (!deal.isNullOrBlank()) {
+                _partnerDealCode.value = deal
+                applyPromoCode(deal)
+            } else {
+                _partnerDealCode.value = "PARTNER25"
+                applyPromoCode("PARTNER25")
+            }
+        } catch (_: Exception) {}
+    }
+
+    fun registerPartnerMerchant(
+        businessName: String,
+        contactName: String,
+        email: String,
+        country: String,
+        iban: String,
+        bic: String,
+        currencyCode: String = "EUR",
+        onSuccess: (PartnerRegistrationEntity) -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            val partner = PartnerRegistrationEntity(
+                id = "partner_${System.currentTimeMillis()}",
+                businessName = businessName.ifBlank { "Westerveld Global Commerce BV" },
+                contactName = contactName.ifBlank { "J.P. Westerveld" },
+                email = email.ifBlank { "westerveldjp@gmail.com" },
+                country = country.ifBlank { "Netherlands" },
+                iban = iban.ifBlank { "NL43INGB0006372146" },
+                bic = bic.ifBlank { "INGBL2A" },
+                dealCode = _partnerDealCode.value,
+                discountPercent = 25,
+                merchantId = "JPW-GLABA-${(1000..9999).random()}",
+                apiKey = "glaba_live_partner25_sec_${UUID.randomUUID().toString().take(12)}",
+                timestamp = System.currentTimeMillis()
+            )
+            _registeredPartners.value = _registeredPartners.value + partner
+
+            val log = TransactionLogEntity(
+                logType = "PARTNER_JOIN",
+                title = "New Merchant Partner Onboarded (${partner.dealCode})",
+                barcodeOrRawValue = "https://glaba.pro/join/${partner.contactName}?deal=${partner.dealCode}",
+                barcodeFormat = "PARTNER_URL",
+                amount = 250.0,
+                currencyCode = currencyCode,
+                amountInUsd = 270.0,
+                customerOrRecipient = "${partner.businessName} (${partner.contactName})",
+                country = partner.country,
+                paymentMethod = "SEPA_ING_ONBOARDING",
+                status = "ACTIVE_PARTNER",
+                referenceCode = partner.merchantId,
+                notes = "25% Fee Discount Activated. Settlement: ${partner.iban} (${partner.bic})"
+            )
+            repository.insertLog(log)
+            onSuccess(partner)
+        }
+    }
+
     fun openWebCheckout(url: String? = null) {
         val target = url ?: "https://glaba.pro/pay?m=org_6RsNhnGbSQ3s7rFPAoYfQjA&c=EUR&code=GLOBAL15"
+        if (target.contains("/join", ignoreCase = true) || target.contains("JPWESTERVELD", ignoreCase = true)) {
+            openPartnerJoin(target)
+            return
+        }
         _webCheckoutUrl.value = target
         parseAndApplyUrlParameters(target)
         _isWebCheckoutOpen.value = true
@@ -939,12 +1359,16 @@ class GlobalMarketViewModel(
         if (uri == null) return
         val urlString = uri.toString()
         if (urlString.contains("glaba.pro", ignoreCase = true) || uri.scheme.equals("glaba", ignoreCase = true)) {
-            parseAndApplyUrlParameters(urlString)
-            val currency = _selectedCurrency.value.code
-            val promo = _appliedPromoCode.value ?: "GLOBAL15"
-            val discount = _promoDiscountPercent.value
-            _deepLinkBanner.value = "Glaba Pro Storefront Loaded ($currency • $promo: -$discount%)"
-            _isWebCheckoutOpen.value = true
+            if (urlString.contains("/join", ignoreCase = true) || uri.path?.contains("join") == true || urlString.contains("JPWESTERVELD", ignoreCase = true)) {
+                openPartnerJoin(urlString)
+            } else {
+                parseAndApplyUrlParameters(urlString)
+                val currency = _selectedCurrency.value.code
+                val promo = _appliedPromoCode.value ?: "GLOBAL15"
+                val discount = _promoDiscountPercent.value
+                _deepLinkBanner.value = "Glaba Pro Storefront Loaded ($currency • $promo: -$discount%)"
+                _isWebCheckoutOpen.value = true
+            }
         }
     }
 
