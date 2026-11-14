@@ -10,7 +10,8 @@ class TransactionRepository(
     private val transactionHistoryDao: TransactionHistoryDao? = null,
     private val salesTerminalDao: SalesTerminalDao? = null,
     private val inventoryProductDao: InventoryProductDao? = null,
-    private val salesTransactionDao: SalesTransactionDao? = null
+    private val salesTransactionDao: SalesTransactionDao? = null,
+    private val payoutWireDao: PayoutWireDao? = null
 ) {
     // Legacy / Primary Transactions
     val allTransactions: Flow<List<TransactionEntity>> = transactionDao.getAllTransactions()
@@ -403,5 +404,85 @@ class TransactionRepository(
     suspend fun clearAllSalesTransactions() {
         salesTransactionDao?.clearAllSalesTransactions()
     }
+
+    // ==========================================
+    // Processed Payouts & Simulated Bank Wire History
+    // ==========================================
+    val allPayoutWireHistory: Flow<List<PayoutWireEntity>> =
+        payoutWireDao?.getAllPayoutWireHistory() ?: flowOf(emptyList())
+
+    val processedPayouts: Flow<List<PayoutWireEntity>> =
+        payoutWireDao?.getProcessedPayouts() ?: flowOf(emptyList())
+
+    val simulatedBankWires: Flow<List<PayoutWireEntity>> =
+        payoutWireDao?.getSimulatedBankWires() ?: flowOf(emptyList())
+
+    val totalPayoutWireCount: Flow<Int> =
+        payoutWireDao?.getTotalPayoutWireCount() ?: flowOf(0)
+
+    val processedPayoutCount: Flow<Int> =
+        payoutWireDao?.getProcessedPayoutCount() ?: flowOf(0)
+
+    val simulatedBankWireCount: Flow<Int> =
+        payoutWireDao?.getSimulatedBankWireCount() ?: flowOf(0)
+
+    val totalPayoutWireNetDisbursedUsd: Flow<Double?> =
+        payoutWireDao?.getTotalNetDisbursedUsd() ?: flowOf(0.0)
+
+    val totalPayoutWireGrossDisbursedUsd: Flow<Double?> =
+        payoutWireDao?.getTotalGrossDisbursedUsd() ?: flowOf(0.0)
+
+    fun getPayoutWireById(id: Long): Flow<PayoutWireEntity?> =
+        payoutWireDao?.getPayoutWireById(id) ?: flowOf(null)
+
+    fun getPayoutWireByReference(referenceCode: String): Flow<PayoutWireEntity?> =
+        payoutWireDao?.getPayoutWireByReference(referenceCode) ?: flowOf(null)
+
+    fun getPayoutWiresByType(transactionType: String): Flow<List<PayoutWireEntity>> =
+        payoutWireDao?.getPayoutWiresByType(transactionType) ?: flowOf(emptyList())
+
+    fun getPayoutWiresByMethod(method: String): Flow<List<PayoutWireEntity>> =
+        payoutWireDao?.getPayoutWiresByMethod(method) ?: flowOf(emptyList())
+
+    fun getPayoutWiresByStatus(status: String): Flow<List<PayoutWireEntity>> =
+        payoutWireDao?.getPayoutWiresByStatus(status) ?: flowOf(emptyList())
+
+    fun getPayoutWiresByCurrency(currencyCode: String): Flow<List<PayoutWireEntity>> =
+        payoutWireDao?.getPayoutWiresByCurrency(currencyCode) ?: flowOf(emptyList())
+
+    fun getPayoutWiresByDateRange(startTime: Long, endTime: Long): Flow<List<PayoutWireEntity>> =
+        payoutWireDao?.getPayoutWiresByDateRange(startTime, endTime) ?: flowOf(emptyList())
+
+    fun searchPayoutWireHistory(query: String): Flow<List<PayoutWireEntity>> =
+        payoutWireDao?.searchPayoutWireHistory(query) ?: flowOf(emptyList())
+
+    suspend fun insertPayoutWire(record: PayoutWireEntity): Long {
+        return payoutWireDao?.insertPayoutWire(record) ?: -1L
+    }
+
+    suspend fun insertPayoutWires(records: List<PayoutWireEntity>): List<Long> {
+        return payoutWireDao?.insertPayoutWires(records) ?: emptyList()
+    }
+
+    suspend fun updatePayoutWire(record: PayoutWireEntity) {
+        payoutWireDao?.updatePayoutWire(record)
+    }
+
+    suspend fun updatePayoutWireStatus(id: Long, newStatus: String) {
+        payoutWireDao?.updatePayoutWireStatus(id, newStatus)
+    }
+
+    suspend fun deletePayoutWire(record: PayoutWireEntity) {
+        payoutWireDao?.deletePayoutWire(record)
+    }
+
+    suspend fun deletePayoutWireById(id: Long) {
+        payoutWireDao?.deletePayoutWireById(id)
+    }
+
+    suspend fun clearAllPayoutWires() {
+        payoutWireDao?.clearAllPayoutWires()
+    }
 }
+
 

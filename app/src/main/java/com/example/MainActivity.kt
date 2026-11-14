@@ -29,6 +29,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.Chat
+import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.automirrored.filled.Message
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.automirrored.filled.TrendingUp
@@ -59,6 +60,7 @@ import com.example.data.TransactionEntity
 import com.example.data.TransactionRepository
 import com.example.ui.AppLanguage
 import com.example.ui.AuthScreen
+import com.example.ui.attemptAutoSignIn
 import com.example.ui.signOutUser
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
@@ -77,6 +79,7 @@ import com.example.ui.PayoutMethodType
 import com.example.ui.QrPaymentDialog
 import com.example.ui.RealTimeCurrencyConversionTool
 import com.example.ui.RealTimeCurrencyConverterModal
+import com.example.ui.SecurityThreatDefenseModal
 import com.example.ui.TransactionSummaryScreen
 import com.example.ui.UserProfile
 import com.example.ui.theme.*
@@ -107,7 +110,8 @@ class MainActivity : ComponentActivity() {
             database.transactionHistoryDao(),
             database.salesTerminalDao(),
             database.inventoryProductDao(),
-            database.salesTransactionDao()
+            database.salesTransactionDao(),
+            database.payoutWireDao()
         )
 
         val firestoreDb = try {
@@ -120,6 +124,9 @@ class MainActivity : ComponentActivity() {
         setContent {
             val firebaseAuth = remember { FirebaseAuth.getInstance() }
             var currentUser by remember { mutableStateOf(firebaseAuth.currentUser) }
+            val context = LocalContext.current
+            val scope = rememberCoroutineScope()
+            val credentialManager = remember { CredentialManager.create(context) }
 
             DisposableEffect(Unit) {
                 val listener = FirebaseAuth.AuthStateListener { auth ->
@@ -131,34 +138,50 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
+            LaunchedEffect(currentUser) {
+                if (currentUser == null) {
+                    attemptAutoSignIn(
+                        context = context,
+                        credentialManager = credentialManager,
+                        onAuthSuccess = { currentUser = firebaseAuth.currentUser },
+                        onUnauthenticated = {},
+                        scope = scope
+                    )
+                }
+            }
+
             MyApplicationTheme {
                 if (currentUser == null) {
                     AuthScreen(
                         onAuthSuccess = { currentUser = firebaseAuth.currentUser }
                     )
                 } else {
-                    val viewModel: GlobalMarketViewModel = viewModel(
-                        factory = GlobalMarketViewModelFactory(repository, firestoreRepository)
-                    )
-                    attachedViewModel = viewModel
+                    val uid = currentUser!!.uid
+                    key(uid) {
+                        val viewModel: GlobalMarketViewModel = viewModel(
+                            key = uid,
+                            factory = GlobalMarketViewModelFactory(repository, firestoreRepository)
+                        )
+                        attachedViewModel = viewModel
 
-                    val selectedTab by viewModel.selectedTab.collectAsStateWithLifecycle()
-                    val isShareModalOpen by viewModel.isShareModalOpen.collectAsStateWithLifecycle()
-                    val selectedCampaign by viewModel.selectedCampaign.collectAsStateWithLifecycle()
-                    val isBarcodeScannerOpen by viewModel.isBarcodeScannerOpen.collectAsStateWithLifecycle()
-                    val isWebCheckoutOpen by viewModel.isWebCheckoutOpen.collectAsStateWithLifecycle()
-                    val isPartnerJoinOpen by viewModel.isPartnerJoinOpen.collectAsStateWithLifecycle()
-                    val isPayoutModalOpen by viewModel.isPayoutModalOpen.collectAsStateWithLifecycle()
-                    val isOwnerPayoutScreenOpen by viewModel.isOwnerPayoutScreenOpen.collectAsStateWithLifecycle()
-                    val isCurrencyConverterModalOpen by viewModel.isCurrencyConverterModalOpen.collectAsStateWithLifecycle()
-                    val deepLinkBanner by viewModel.deepLinkBanner.collectAsStateWithLifecycle()
+                        val selectedTab by viewModel.selectedTab.collectAsStateWithLifecycle()
+                        val isShareModalOpen by viewModel.isShareModalOpen.collectAsStateWithLifecycle()
+                        val selectedCampaign by viewModel.selectedCampaign.collectAsStateWithLifecycle()
+                        val isBarcodeScannerOpen by viewModel.isBarcodeScannerOpen.collectAsStateWithLifecycle()
+                        val isWebCheckoutOpen by viewModel.isWebCheckoutOpen.collectAsStateWithLifecycle()
+                        val isPartnerJoinOpen by viewModel.isPartnerJoinOpen.collectAsStateWithLifecycle()
+                        val isPayoutModalOpen by viewModel.isPayoutModalOpen.collectAsStateWithLifecycle()
+                        val isOwnerPayoutScreenOpen by viewModel.isOwnerPayoutScreenOpen.collectAsStateWithLifecycle()
+                        val isCurrencyConverterModalOpen by viewModel.isCurrencyConverterModalOpen.collectAsStateWithLifecycle()
+                        val isSecurityDefenseModalOpen by viewModel.isSecurityDefenseModalOpen.collectAsStateWithLifecycle()
+                        val deepLinkBanner by viewModel.deepLinkBanner.collectAsStateWithLifecycle()
 
-                    // Handle incoming deep link when launched from external URL or intent
-                    LaunchedEffect(Unit) {
-                        intent?.data?.let { uri ->
-                            viewModel.handleDeepLink(uri)
+                        // Handle incoming deep link when launched from external URL or intent
+                        LaunchedEffect(Unit) {
+                            intent?.data?.let { uri ->
+                                viewModel.handleDeepLink(uri)
+                            }
                         }
-                    }
 
                     Scaffold(
                     modifier = Modifier.fillMaxSize(),
@@ -314,17 +337,25 @@ class MainActivity : ComponentActivity() {
                         }
                     }
 
-                    if (isCurrencyConverterModalOpen) {
-                        RealTimeCurrencyConverterModal(
-                            viewModel = viewModel,
-                            onDismiss = { viewModel.closeCurrencyConverterModal() }
-                        )
+                        if (isCurrencyConverterModalOpen) {
+                            RealTimeCurrencyConverterModal(
+                                viewModel = viewModel,
+                                onDismiss = { viewModel.closeCurrencyConverterModal() }
+                            )
+                        }
+
+                        if (isSecurityDefenseModalOpen) {
+                            SecurityThreatDefenseModal(
+                                viewModel = viewModel,
+                                onDismiss = { viewModel.closeSecurityDefenseModal() }
+                            )
+                        }
+                    }
                     }
                 }
             }
         }
     }
-}
 }
 
 // -------------------------------------------------------------
@@ -2373,6 +2404,22 @@ fun EnhancedAccountSettingsView(
                         checked = profile.emailNotifications,
                         onCheckedChange = { viewModel.toggleNotifications(it) }
                     )
+
+                    HorizontalDivider(color = CleanBorderSubtle)
+
+                    Button(
+                        onClick = { viewModel.openSecurityDefenseModal() },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(46.dp)
+                            .testTag("open_security_defense_button"),
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0F172A))
+                    ) {
+                        Icon(imageVector = Icons.Default.Security, contentDescription = null, modifier = Modifier.size(18.dp), tint = Color(0xFF38BDF8))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(text = "Cyber Threat Defense & AI Sentinel", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Color.White)
+                    }
                 }
             }
         }
@@ -2613,6 +2660,34 @@ fun EnhancedAccountSettingsView(
                         ) {
                             Text("Clear", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         }
+                    }
+
+                    HorizontalDivider(color = CleanBorderSubtle)
+
+                    val signOutScope = rememberCoroutineScope()
+                    val credentialManager = remember { CredentialManager.create(context) }
+                    OutlinedButton(
+                        onClick = {
+                            signOutUser(
+                                context = context,
+                                credentialManager = credentialManager,
+                                onSignOutComplete = {
+                                    Toast.makeText(context, "Signed out cleanly", Toast.LENGTH_SHORT).show()
+                                },
+                                scope = signOutScope
+                            )
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(46.dp)
+                            .testTag("sign_out_button"),
+                        shape = RoundedCornerShape(14.dp),
+                        border = BorderStroke(1.dp, CleanBorder),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = CleanTextPrimary)
+                    ) {
+                        Icon(imageVector = Icons.AutoMirrored.Filled.Logout, contentDescription = "Sign Out", modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Sign Out of Account", fontSize = 13.sp, fontWeight = FontWeight.Bold)
                     }
                 }
             }

@@ -35,6 +35,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.data.PayoutWireEntity
 import com.example.data.TransactionLogEntity
 import com.example.ui.theme.*
 import com.example.util.CurrencyFormatter
@@ -62,6 +63,7 @@ fun OwnerPayoutSectionView(
     val payoutConfig by viewModel.payoutConfig.collectAsStateWithLifecycle()
     val transactions by viewModel.transactions.collectAsStateWithLifecycle()
     val transactionLogs by viewModel.transactionLogs.collectAsStateWithLifecycle()
+    val payoutWireHistory by viewModel.payoutWireHistory.collectAsStateWithLifecycle()
     val selectedCurrency by viewModel.selectedCurrency.collectAsStateWithLifecycle()
     val currencyFormatter = remember { CurrencyFormatter.DEFAULT }
 
@@ -76,8 +78,26 @@ fun OwnerPayoutSectionView(
             .sortedByDescending { it.timestamp }
     }
 
-    val totalDisbursedUsd = remember(payoutLogs) {
-        payoutLogs.sumOf { it.amountInUsd }
+    var historyFilter by remember { mutableStateOf("ALL") }
+    val filteredPayoutWires = remember(payoutWireHistory, historyFilter) {
+        when (historyFilter) {
+            "PAYOUTS" -> payoutWireHistory.filter { !it.isSimulatedWire && it.transactionType == "PROCESSED_PAYOUT" }
+            "SIM_WIRES" -> payoutWireHistory.filter { it.isSimulatedWire || it.transactionType == "SIMULATED_BANK_WIRE" }
+            "IDEAL" -> payoutWireHistory.filter {
+                it.method.equals("IDEAL", ignoreCase = true) ||
+                    it.clearingRail.contains("iDEAL", ignoreCase = true) ||
+                    it.clearingRail.contains("SEPA", ignoreCase = true)
+            }
+            else -> payoutWireHistory
+        }
+    }
+
+    val totalDisbursedUsd = remember(payoutWireHistory, payoutLogs) {
+        if (payoutWireHistory.isNotEmpty()) {
+            payoutWireHistory.filter { !it.isSimulatedWire }.sumOf { it.grossAmountUsd }
+        } else {
+            payoutLogs.sumOf { it.amountInUsd }
+        }
     }
 
     val availablePayoutBalanceUsd = remember(totalGrossRevenueUsd, totalDisbursedUsd) {
@@ -90,6 +110,7 @@ fun OwnerPayoutSectionView(
     var selectedPayoutCurrency by remember { mutableStateOf(selectedCurrency) }
     var isCurrencyMenuOpen by remember { mutableStateOf(false) }
     var isDisbursing by remember { mutableStateOf(false) }
+    var isSimulatingWire by remember { mutableStateOf(false) }
     var lastSuccessRef by remember { mutableStateOf<String?>(null) }
     var showEditCredentialsDialog by remember { mutableStateOf(false) }
 
@@ -1154,45 +1175,142 @@ fun OwnerPayoutSectionView(
                             )
                         }
                     }
-                }
-            }
-        }
 
-        // 5. OWNER SETTLEMENT AUDIT HISTORY (ROOM DATABASE)
-        item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "OWNER SETTLEMENT AUDIT LEDGER (${payoutLogs.size})",
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = CleanTextMuted,
-                    letterSpacing = 0.8.sp
-                )
+                    Spacer(modifier = Modifier.height(4.dp))
 
-                if (payoutLogs.isNotEmpty()) {
-                    TextButton(
+                    // F. Simulate iDEAL / SEPA Bank Wire Action Button
+                    OutlinedButton(
                         onClick = {
-                            val summary = payoutLogs.joinToString("\n") { log ->
-                                "${log.referenceCode},${log.timestamp},${log.paymentMethod},${log.amountInUsd},${log.currencyCode},${log.status}"
+                            val simAmount = if (parsedAmount > 0.0) parsedAmount else 250.0
+                            isSimulatingWire = true
+                            scope.launch {
+                                delay(400)
+                                viewModel.simulateBankWireTransfer(
+                                    amountInUsd = simAmount,
+                                    currencyCode = selectedPayoutCurrency.code,
+                                    method = "IDEAL",
+                                    clearingRail = "iDEAL / SEPA Instant",
+                                    recipientName = payoutConfig.bankWire.accountHolderName,
+                                    bankName = payoutConfig.bankWire.bankName,
+                                    ibanOrAccount = payoutConfig.bankWire.accountNumberOrIban,
+                                    swiftBic = payoutConfig.bankWire.swiftBic,
+                                    country = payoutConfig.bankWire.country,
+                                    notes = "Simulated iDEAL & ING Bank SEPA wire test",
+                                    onSuccess = { saved ->
+                                        lastSuccessRef = saved.referenceCode
+                                        isSimulatingWire = false
+                                        Toast.makeText(
+                                            context,
+                                            "Simulated Bank Wire ${saved.referenceCode} saved to Room!",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    }
+                                )
                             }
-                            clipboardManager.setText(AnnotatedString(summary))
-                            Toast.makeText(context, "Settlement audit records copied to clipboard!", Toast.LENGTH_SHORT).show()
                         },
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                        enabled = !isSimulatingWire && !isDisbursing,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(46.dp)
+                            .testTag("simulate_ideal_bank_wire_button"),
+                        shape = RoundedCornerShape(14.dp),
+                        border = BorderStroke(1.dp, CleanOrange.copy(alpha = 0.7f)),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = CleanOrangeText)
                     ) {
-                        Icon(imageVector = Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(14.dp), tint = CleanPrimary)
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(text = "Copy Audit", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = CleanPrimary)
+                        if (isSimulatingWire) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
+                                color = CleanOrange
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(text = "Simulating Bank Wire...", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        } else {
+                            Icon(
+                                imageVector = Icons.Default.SyncAlt,
+                                contentDescription = null,
+                                tint = CleanOrange,
+                                modifier = Modifier.size(17.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Simulate Bank Wire (iDEAL / SEPA)",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
                     }
                 }
             }
         }
 
-        if (payoutLogs.isEmpty()) {
+        // 5. OWNER SETTLEMENT AUDIT HISTORY (ROOM DATABASE: payout_wire_history)
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "PAYOUT & BANK WIRE HISTORY (${filteredPayoutWires.size})",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = CleanTextMuted,
+                        letterSpacing = 0.8.sp
+                    )
+
+                    if (payoutWireHistory.isNotEmpty()) {
+                        TextButton(
+                            onClick = {
+                                val summary = payoutWireHistory.joinToString("\n") { rec ->
+                                    "${rec.referenceCode},${rec.transactionType},${rec.clearingRail},${rec.grossAmountUsd},${rec.netAmountUsd},${rec.currencyCode},${rec.ibanOrAccount},${rec.status}"
+                                }
+                                clipboardManager.setText(AnnotatedString(summary))
+                                Toast.makeText(context, "Payout & Wire Room records copied!", Toast.LENGTH_SHORT).show()
+                            },
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                        ) {
+                            Icon(imageVector = Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(14.dp), tint = CleanPrimary)
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(text = "Copy CSV", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = CleanPrimary)
+                        }
+                    }
+                }
+
+                // Filter Chips for Payouts vs Simulated Wires vs iDEAL
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    listOf(
+                        "ALL" to "All (${payoutWireHistory.size})",
+                        "PAYOUTS" to "Payouts",
+                        "SIM_WIRES" to "Sim Wires",
+                        "IDEAL" to "iDEAL / SEPA"
+                    ).forEach { (key, label) ->
+                        val isSelected = historyFilter == key
+                        Surface(
+                            onClick = { historyFilter = key },
+                            shape = RoundedCornerShape(10.dp),
+                            color = if (isSelected) CleanPrimaryContainer else CleanSurfaceVariant,
+                            border = BorderStroke(1.dp, if (isSelected) CleanPrimary else CleanBorderSubtle),
+                            modifier = Modifier.testTag("payout_history_filter_$key")
+                        ) {
+                            Text(
+                                text = label,
+                                fontSize = 10.sp,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                color = if (isSelected) CleanPrimary else CleanTextSecondary,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        if (filteredPayoutWires.isEmpty() && payoutLogs.isEmpty()) {
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -1222,19 +1340,33 @@ fun OwnerPayoutSectionView(
                             )
                         }
                         Text(
-                            text = "No Owner Payouts Disbursed Yet",
+                            text = "No Payout or Wire History Yet",
                             fontSize = 14.sp,
                             fontWeight = FontWeight.Bold,
                             color = CleanTextPrimary
                         )
                         Text(
-                            text = "Use the disbursement form above to trigger your first Bank Wire or PayPal settlement.",
+                            text = "Disburse a payout or run a simulated Bank Wire / iDEAL transfer above to store it in Room.",
                             fontSize = 12.sp,
                             color = CleanTextSecondary,
                             modifier = Modifier.padding(horizontal = 16.dp)
                         )
                     }
                 }
+            }
+        } else if (filteredPayoutWires.isNotEmpty()) {
+            items(
+                items = filteredPayoutWires,
+                key = { "wire_${it.id}" }
+            ) { wireRecord ->
+                PayoutWireHistoryCard(
+                    record = wireRecord,
+                    currencyFormatter = currencyFormatter,
+                    onToggleStatus = {
+                        val nextStatus = if (wireRecord.status == "SETTLED") "COMPLETED" else "SETTLED"
+                        viewModel.updatePayoutWireStatus(wireRecord.id, nextStatus)
+                    }
+                )
             }
         } else {
             items(
@@ -1257,6 +1389,154 @@ fun OwnerPayoutSectionView(
             currentConfig = payoutConfig,
             onDismiss = { showEditCredentialsDialog = false }
         )
+    }
+}
+
+/**
+ * Dedicated Room-backed Payout & Simulated Bank Wire Card
+ */
+@Composable
+fun PayoutWireHistoryCard(
+    record: PayoutWireEntity,
+    currencyFormatter: CurrencyFormatter,
+    onToggleStatus: () -> Unit
+) {
+    val dateString = remember(record.timestamp) {
+        SimpleDateFormat("MMM dd, yyyy • HH:mm", Locale.getDefault()).format(Date(record.timestamp))
+    }
+    val isBankOrIdeal = record.method != "PAYPAL"
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(18.dp))
+            .clickable { onToggleStatus() }
+            .testTag("payout_wire_history_card_${record.id}"),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = CleanSurface),
+        border = BorderStroke(
+            1.dp,
+            if (record.isSimulatedWire) CleanOrange.copy(alpha = 0.45f) else CleanBorder
+        )
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(42.dp)
+                            .clip(CircleShape)
+                            .background(
+                                if (record.isSimulatedWire) CleanOrangeContainer
+                                else if (isBankOrIdeal) CleanPrimaryContainer
+                                else CleanSecondaryContainer
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = if (isBankOrIdeal) Icons.Default.AccountBalance else Icons.Default.Payments,
+                            contentDescription = null,
+                            tint = if (record.isSimulatedWire) CleanOrange
+                            else if (isBankOrIdeal) CleanPrimary
+                            else CleanSecondary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                text = record.clearingRail,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = CleanTextPrimary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = if (record.isSimulatedWire) CleanOrangeContainer else CleanPrimaryContainer
+                            ) {
+                                Text(
+                                    text = if (record.isSimulatedWire) "SIM WIRE" else "PAYOUT",
+                                    fontSize = 8.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = if (record.isSimulatedWire) CleanOrangeText else CleanPrimary,
+                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
+                        Text(
+                            text = "$dateString • ${record.referenceCode}",
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = CleanTextSecondary
+                        )
+                    }
+                }
+
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        text = currencyFormatter.formatUsd(record.netAmountUsd),
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = if (record.isSimulatedWire) CleanOrange else CleanPrimary
+                    )
+                    Text(
+                        text = "≈ ${currencyFormatter.format(record.convertedAmount, record.currencyCode)}",
+                        fontSize = 10.sp,
+                        color = CleanTextSecondary
+                    )
+                }
+            }
+
+            HorizontalDivider(color = CleanBorderSubtle)
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "${record.bankName} • ${record.ibanOrAccount}",
+                    fontSize = 10.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = CleanTextMuted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = CleanSuccessContainer
+                ) {
+                    Text(
+                        text = record.status,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = CleanSuccess,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
+            }
+        }
     }
 }
 

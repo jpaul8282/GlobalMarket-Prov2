@@ -823,6 +823,49 @@ class GlobalMarketViewModel(
                     repository.insertInventoryProducts(sampleInventory)
                 }
             } catch (_: Exception) {}
+
+            // Sync user profile and payout settings from Cloud Firestore if authenticated
+            firestoreRepository?.let { firestoreRepo ->
+                try {
+                    firestoreRepo.getUserProfile().getOrNull()?.let { cloudProfile ->
+                        if (cloudProfile.fullName.isNotBlank()) {
+                            val initials = cloudProfile.fullName.trim().split(" ")
+                                .filter { it.isNotEmpty() }
+                                .take(2)
+                                .map { it.first().uppercaseChar() }
+                                .joinToString("")
+                                .ifEmpty { "JP" }
+                            _userProfile.value = _userProfile.value.copy(
+                                name = cloudProfile.fullName,
+                                email = cloudProfile.email.ifBlank { _userProfile.value.email },
+                                organization = cloudProfile.organization.ifBlank { _userProfile.value.organization },
+                                orgId = cloudProfile.orgId.ifBlank { _userProfile.value.orgId },
+                                initials = initials
+                            )
+                        }
+                    }
+                    firestoreRepo.getPayoutSetting().getOrNull()?.let { cloudSetting ->
+                        val method = if (cloudSetting.selectedMethod == "PAYPAL") PayoutMethodType.PAYPAL else PayoutMethodType.BANK_WIRE
+                        _payoutConfig.value = _payoutConfig.value.copy(
+                            selectedMethod = method,
+                            bankWire = _payoutConfig.value.bankWire.copy(
+                                bankName = cloudSetting.bankName.ifBlank { _payoutConfig.value.bankWire.bankName },
+                                accountHolderName = cloudSetting.accountHolderName.ifBlank { _payoutConfig.value.bankWire.accountHolderName },
+                                accountNumberOrIban = cloudSetting.accountNumberOrIban.ifBlank { _payoutConfig.value.bankWire.accountNumberOrIban },
+                                swiftBic = cloudSetting.swiftBic.ifBlank { _payoutConfig.value.bankWire.swiftBic },
+                                routingNumber = cloudSetting.routingNumber.ifBlank { _payoutConfig.value.bankWire.routingNumber },
+                                intermediaryBank = cloudSetting.intermediaryBank.ifBlank { _payoutConfig.value.bankWire.intermediaryBank }
+                            ),
+                            payPal = _payoutConfig.value.payPal.copy(
+                                paypalEmailOrId = cloudSetting.paypalEmailOrId.ifBlank { _payoutConfig.value.payPal.paypalEmailOrId },
+                                recipientName = cloudSetting.recipientName.ifBlank { _payoutConfig.value.payPal.recipientName },
+                                phoneOrPaypalMe = cloudSetting.phoneOrPaypalMe.ifBlank { _payoutConfig.value.payPal.phoneOrPaypalMe },
+                                accountType = cloudSetting.accountType.ifBlank { _payoutConfig.value.payPal.accountType }
+                            )
+                        )
+                    }
+                } catch (_: Exception) {}
+            }
         }
     }
 
@@ -1602,18 +1645,46 @@ class GlobalMarketViewModel(
 
     fun selectPayoutMethod(method: PayoutMethodType) {
         _payoutConfig.value = _payoutConfig.value.copy(selectedMethod = method)
+        syncPayoutConfigToFirestore(_payoutConfig.value)
     }
 
     fun updateBankWireDetails(details: BankWireDetails) {
         _payoutConfig.value = _payoutConfig.value.copy(bankWire = details)
+        syncPayoutConfigToFirestore(_payoutConfig.value)
     }
 
     fun updatePayPalDetails(details: PayPalDetails) {
         _payoutConfig.value = _payoutConfig.value.copy(payPal = details)
+        syncPayoutConfigToFirestore(_payoutConfig.value)
     }
 
     fun updatePayoutConfig(config: MerchantPayoutConfig) {
         _payoutConfig.value = config
+        syncPayoutConfigToFirestore(config)
+    }
+
+    private fun syncPayoutConfigToFirestore(config: MerchantPayoutConfig) {
+        val firestoreRepo = firestoreRepository ?: return
+        viewModelScope.launch {
+            try {
+                firestoreRepo.savePayoutSetting(
+                    FirestorePayoutSetting(
+                        userId = firestoreRepo.requireUserId(),
+                        selectedMethod = if (config.selectedMethod == PayoutMethodType.BANK_WIRE) "BANK_WIRE" else "PAYPAL",
+                        bankName = config.bankWire.bankName,
+                        accountHolderName = config.bankWire.accountHolderName,
+                        accountNumberOrIban = config.bankWire.accountNumberOrIban,
+                        swiftBic = config.bankWire.swiftBic,
+                        routingNumber = config.bankWire.routingNumber,
+                        intermediaryBank = config.bankWire.intermediaryBank,
+                        paypalEmailOrId = config.payPal.paypalEmailOrId,
+                        recipientName = config.payPal.recipientName,
+                        phoneOrPaypalMe = config.payPal.phoneOrPaypalMe,
+                        accountType = config.payPal.accountType
+                    )
+                )
+            } catch (_: Exception) {}
+        }
     }
 
     fun calculatePayoutFee(method: PayoutMethodType, amountInUsd: Double): Double {
@@ -1687,16 +1758,44 @@ class GlobalMarketViewModel(
             notes = notes
         )
 
+        val feeVal = calculatePayoutFee(method, amountInUsd)
+        val netUsd = (amountInUsd - feeVal).coerceAtLeast(0.0)
+        val bankDetails = _payoutConfig.value.bankWire
+
+        val payoutWireRecord = PayoutWireEntity(
+            referenceCode = refCode,
+            transactionType = "PROCESSED_PAYOUT",
+            method = if (method == PayoutMethodType.BANK_WIRE) "BANK_WIRE" else "PAYPAL",
+            grossAmountUsd = amountInUsd,
+            feeUsd = feeVal,
+            netAmountUsd = netUsd,
+            convertedAmount = converted,
+            currencyCode = currency.code,
+            exchangeRate = currency.exchangeRate,
+            recipientName = recipientName,
+            bankName = if (method == PayoutMethodType.BANK_WIRE) bankDetails.bankName else "PayPal Digital Wallet",
+            ibanOrAccount = destinationIdentifier,
+            swiftBic = if (method == PayoutMethodType.BANK_WIRE) bankDetails.swiftBic else "PAYPAL",
+            routingNumber = if (method == PayoutMethodType.BANK_WIRE) bankDetails.routingNumber else "",
+            intermediaryBank = if (method == PayoutMethodType.BANK_WIRE) bankDetails.intermediaryBank else "",
+            country = if (method == PayoutMethodType.BANK_WIRE) bankDetails.country else currency.defaultCountry,
+            clearingRail = if (method == PayoutMethodType.BANK_WIRE) "SEPA Target2 / SWIFT" else "PayPal Instant",
+            status = "COMPLETED",
+            isSimulatedWire = false,
+            timestamp = entity.timestamp,
+            notes = notes ?: "Disbursed via ${method.displayName} to $destinationIdentifier"
+        )
+
         _lastDisbursedPayoutReference.value = refCode
 
         repository.insert(entity)
         repository.insertLog(logEntity)
         repository.insertSalesTransaction(salesRecord)
+        repository.insertPayoutWire(payoutWireRecord)
 
         // Sync to cloud Firestore when user is authenticated
         firestoreRepository?.let { firestoreRepo ->
             try {
-                val feeVal = calculatePayoutFee(method, amountInUsd)
                 val net = (converted - feeVal).coerceAtLeast(0.0)
                 val cloudRecord = com.example.data.FirestoreOwnerPayoutRecord(
                     userId = firestoreRepo.requireUserId(),
@@ -1739,6 +1838,144 @@ class GlobalMarketViewModel(
                 notes = notes
             )
             onSuccess(entity)
+        }
+    }
+
+    suspend fun saveSimulatedBankWire(
+        amountInUsd: Double,
+        currencyCode: String = "EUR",
+        method: String = "SEPA_INSTANT",
+        clearingRail: String = "iDEAL / SEPA Instant",
+        recipientName: String = _payoutConfig.value.bankWire.accountHolderName,
+        bankName: String = _payoutConfig.value.bankWire.bankName,
+        ibanOrAccount: String = _payoutConfig.value.bankWire.accountNumberOrIban,
+        swiftBic: String = _payoutConfig.value.bankWire.swiftBic,
+        country: String = _payoutConfig.value.bankWire.country,
+        notes: String? = null
+    ): PayoutWireEntity {
+        val currency = currencies.find { it.code.equals(currencyCode, ignoreCase = true) } ?: _selectedCurrency.value
+        val rate = _liveRateMap.value[currency.code] ?: currency.exchangeRate
+        val converted = amountInUsd * rate
+        val feeVal = if (method == "IDEAL" || method == "SEPA_INSTANT") 0.35 else 15.00
+        val netUsd = (amountInUsd - feeVal).coerceAtLeast(0.0)
+        val prefix = when (method.uppercase()) {
+            "IDEAL" -> "SIM-IDL"
+            "SEPA_INSTANT" -> "SIM-SEPA"
+            else -> "SIM-WIRE"
+        }
+        val refCode = "$prefix-${(100000..999999).random()}"
+        val now = System.currentTimeMillis()
+
+        val wireEntity = PayoutWireEntity(
+            referenceCode = refCode,
+            transactionType = "SIMULATED_BANK_WIRE",
+            method = method,
+            grossAmountUsd = amountInUsd,
+            feeUsd = feeVal,
+            netAmountUsd = netUsd,
+            convertedAmount = converted,
+            currencyCode = currency.code,
+            exchangeRate = rate,
+            recipientName = recipientName,
+            bankName = bankName,
+            ibanOrAccount = ibanOrAccount,
+            swiftBic = swiftBic,
+            routingNumber = _payoutConfig.value.bankWire.routingNumber,
+            intermediaryBank = _payoutConfig.value.bankWire.intermediaryBank,
+            country = country,
+            clearingRail = clearingRail,
+            status = "SETTLED",
+            isSimulatedWire = true,
+            timestamp = now,
+            notes = notes ?: "Simulated $clearingRail wire to $bankName ($ibanOrAccount)"
+        )
+
+        val logEntity = TransactionLogEntity(
+            logType = "PAYOUT",
+            title = "Simulated Bank Wire ($clearingRail)",
+            barcodeOrRawValue = ibanOrAccount,
+            barcodeFormat = method,
+            amount = converted,
+            currencyCode = currency.code,
+            amountInUsd = amountInUsd,
+            customerOrRecipient = recipientName,
+            country = country,
+            paymentMethod = clearingRail,
+            status = "SETTLED",
+            referenceCode = refCode,
+            notes = wireEntity.notes
+        )
+
+        _lastDisbursedPayoutReference.value = refCode
+        val insertedId = repository.insertPayoutWire(wireEntity)
+        repository.insertLog(logEntity)
+
+        firestoreRepository?.let { firestoreRepo ->
+            try {
+                firestoreRepo.recordTransactionLog(
+                    FirestoreCloudTransactionLog(
+                        userId = firestoreRepo.requireUserId(),
+                        logId = refCode,
+                        logType = "PAYOUT",
+                        title = "Simulated $clearingRail Wire",
+                        amount = converted,
+                        currencyCode = currency.code,
+                        referenceCode = refCode,
+                        customerOrRecipient = recipientName,
+                        status = "SETTLED"
+                    )
+                )
+            } catch (_: Exception) {}
+        }
+
+        return wireEntity.copy(id = insertedId)
+    }
+
+    fun simulateBankWireTransfer(
+        amountInUsd: Double,
+        currencyCode: String = "EUR",
+        method: String = "SEPA_INSTANT",
+        clearingRail: String = "iDEAL / SEPA Instant",
+        recipientName: String = _payoutConfig.value.bankWire.accountHolderName,
+        bankName: String = _payoutConfig.value.bankWire.bankName,
+        ibanOrAccount: String = _payoutConfig.value.bankWire.accountNumberOrIban,
+        swiftBic: String = _payoutConfig.value.bankWire.swiftBic,
+        country: String = _payoutConfig.value.bankWire.country,
+        notes: String? = null,
+        onSuccess: (PayoutWireEntity) -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            val saved = saveSimulatedBankWire(
+                amountInUsd = amountInUsd,
+                currencyCode = currencyCode,
+                method = method,
+                clearingRail = clearingRail,
+                recipientName = recipientName,
+                bankName = bankName,
+                ibanOrAccount = ibanOrAccount,
+                swiftBic = swiftBic,
+                country = country,
+                notes = notes
+            )
+            onSuccess(saved)
+        }
+    }
+
+    fun updatePayoutWireStatus(id: Long, newStatus: String) {
+        viewModelScope.launch {
+            repository.updatePayoutWireStatus(id, newStatus)
+        }
+    }
+
+    fun deletePayoutWireRecord(record: PayoutWireEntity) {
+        viewModelScope.launch {
+            repository.deletePayoutWire(record)
+        }
+    }
+
+    fun clearAllPayoutWires() {
+        viewModelScope.launch {
+            repository.clearAllPayoutWires()
         }
     }
 
@@ -1973,6 +2210,44 @@ class GlobalMarketViewModel(
             repository.clearAllSalesTransactions()
         }
     }
+
+    // ==========================================
+    // Processed Payouts & Simulated Bank Wire History (Room Database)
+    // ==========================================
+    val payoutWireHistory: StateFlow<List<PayoutWireEntity>> = repository.allPayoutWireHistory
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
+        )
+
+    val processedPayouts: StateFlow<List<PayoutWireEntity>> = repository.processedPayouts
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
+        )
+
+    val simulatedBankWires: StateFlow<List<PayoutWireEntity>> = repository.simulatedBankWires
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
+        )
+
+    val totalPayoutWireCount: StateFlow<Int> = repository.totalPayoutWireCount
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = 0
+        )
+
+    val totalPayoutWireNetDisbursedUsd: StateFlow<Double?> = repository.totalPayoutWireNetDisbursedUsd
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = 0.0
+        )
 
     // Currency Converter Feature State
     private val _converterTargetCurrency = MutableStateFlow(currencies[1]) // Default to EUR
@@ -2833,6 +3108,7 @@ class GlobalMarketViewModel(
             repository.clearAll()
             repository.clearAllLogs()
             repository.clearAllHistoryRecords()
+            repository.clearAllPayoutWires()
             _isSubscribed.value = false
         }
     }

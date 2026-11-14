@@ -13,9 +13,10 @@ import androidx.room.RoomDatabase
         TransactionHistoryEntity::class,
         InventoryProductEntity::class,
         TerminalTransactionLogEntity::class,
-        SalesTransactionEntity::class
+        SalesTransactionEntity::class,
+        PayoutWireEntity::class
     ],
-    version = 6,
+    version = 7,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -26,6 +27,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun salesTerminalDao(): SalesTerminalDao
     abstract fun inventoryProductDao(): InventoryProductDao
     abstract fun salesTransactionDao(): SalesTransactionDao
+    abstract fun payoutWireDao(): PayoutWireDao
 
     companion object {
         @Volatile

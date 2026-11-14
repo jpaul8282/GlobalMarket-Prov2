@@ -42,7 +42,8 @@ class PayoutBankWireAndPayPalTest {
             transactionHistoryDao = db.transactionHistoryDao(),
             salesTerminalDao = db.salesTerminalDao(),
             inventoryProductDao = db.inventoryProductDao(),
-            salesTransactionDao = db.salesTransactionDao()
+            salesTransactionDao = db.salesTransactionDao(),
+            payoutWireDao = db.payoutWireDao()
         )
         viewModel = GlobalMarketViewModel(repository)
     }
@@ -116,6 +117,15 @@ class PayoutBankWireAndPayPalTest {
         assertNotNull("Wire sales transaction should be persisted", wireSale)
         assertEquals(750.0, wireSale?.amountInUsd ?: 0.0, 0.01)
         assertEquals("COMPLETED", wireSale?.paymentStatus)
+
+        // Verify PayoutWireEntity
+        val payoutWires = repository.allPayoutWireHistory.first()
+        val wireHistory = payoutWires.firstOrNull { it.method == "BANK_WIRE" && it.recipientName == "Alexander von Humboldt" }
+        assertNotNull("PayoutWireEntity should be persisted for Bank Wire", wireHistory)
+        assertEquals(750.0, wireHistory?.grossAmountUsd ?: 0.0, 0.01)
+        assertEquals(15.0, wireHistory?.feeUsd ?: 0.0, 0.01)
+        assertEquals(735.0, wireHistory?.netAmountUsd ?: 0.0, 0.01)
+        assertEquals(false, wireHistory?.isSimulatedWire)
     }
 
     @Test
@@ -156,6 +166,13 @@ class PayoutBankWireAndPayPalTest {
         val payPalSale = sales.firstOrNull { it.paymentMethod == "PayPal" }
         assertNotNull("PayPal sales record should be persisted", payPalSale)
         assertEquals("merchant.finance@globalmarket.com", payPalSale?.customerEmail)
+
+        // Verify PayoutWireEntity
+        val payoutWires = repository.allPayoutWireHistory.first()
+        val payPalHistory = payoutWires.firstOrNull { it.method == "PAYPAL" && it.recipientName == "Sophie Dubois" }
+        assertNotNull("PayoutWireEntity should be persisted for PayPal", payPalHistory)
+        assertEquals(320.0, payPalHistory?.grossAmountUsd ?: 0.0, 0.01)
+        assertEquals(false, payPalHistory?.isSimulatedWire)
     }
 
     @Test
