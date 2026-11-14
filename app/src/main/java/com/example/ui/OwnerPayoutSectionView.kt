@@ -140,6 +140,9 @@ fun OwnerPayoutSectionView(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Row(
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(end = 6.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
@@ -196,22 +199,44 @@ fun OwnerPayoutSectionView(
                         }
                     }
 
-                    // Direct Full Modal Trigger Button
-                    IconButton(
-                        onClick = { viewModel.openPayoutModal() },
-                        modifier = Modifier
-                            .size(38.dp)
-                            .clip(CircleShape)
-                            .background(CleanPrimaryContainer)
-                            .border(BorderStroke(1.dp, CleanBorder), CircleShape)
-                            .testTag("owner_open_modal_button")
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.Launch,
-                            contentDescription = "Open Full Modal",
-                            tint = CleanPrimary,
-                            modifier = Modifier.size(18.dp)
-                        )
+                        IconButton(
+                            onClick = { viewModel.openPayoutHistoryScreen() },
+                            modifier = Modifier
+                                .size(38.dp)
+                                .clip(CircleShape)
+                                .background(CleanSurfaceVariant)
+                                .border(BorderStroke(1.dp, CleanBorder), CircleShape)
+                                .testTag("owner_open_payout_history_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.History,
+                                contentDescription = "View Payout History",
+                                tint = CleanPrimary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+
+                        // Direct Full Modal Trigger Button
+                        IconButton(
+                            onClick = { viewModel.openPayoutModal() },
+                            modifier = Modifier
+                                .size(38.dp)
+                                .clip(CircleShape)
+                                .background(CleanPrimaryContainer)
+                                .border(BorderStroke(1.dp, CleanBorder), CircleShape)
+                                .testTag("owner_open_modal_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Launch,
+                                contentDescription = "Open Full Modal",
+                                tint = CleanPrimary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
                     }
                 }
             }

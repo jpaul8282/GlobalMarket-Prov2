@@ -1624,6 +1624,9 @@ class GlobalMarketViewModel(
     private val _isOwnerPayoutScreenOpen = MutableStateFlow(false)
     val isOwnerPayoutScreenOpen: StateFlow<Boolean> = _isOwnerPayoutScreenOpen.asStateFlow()
 
+    private val _isPayoutHistoryScreenOpen = MutableStateFlow(false)
+    val isPayoutHistoryScreenOpen: StateFlow<Boolean> = _isPayoutHistoryScreenOpen.asStateFlow()
+
     private val _lastDisbursedPayoutReference = MutableStateFlow<String?>(null)
     val lastDisbursedPayoutReference: StateFlow<String?> = _lastDisbursedPayoutReference.asStateFlow()
 
@@ -1633,6 +1636,14 @@ class GlobalMarketViewModel(
 
     fun closeOwnerPayoutSection() {
         _isOwnerPayoutScreenOpen.value = false
+    }
+
+    fun openPayoutHistoryScreen() {
+        _isPayoutHistoryScreenOpen.value = true
+    }
+
+    fun closePayoutHistoryScreen() {
+        _isPayoutHistoryScreenOpen.value = false
     }
 
     fun openPayoutModal() {

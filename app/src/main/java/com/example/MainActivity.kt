@@ -75,6 +75,7 @@ import com.example.ui.LocalizedPaymentSimulator
 import com.example.ui.MarketingCampaign
 import com.example.ui.OwnerPayoutSectionView
 import com.example.ui.PayoutDisbursementModal
+import com.example.ui.PayoutHistoryScreen
 import com.example.ui.PayoutMethodType
 import com.example.ui.QrPaymentDialog
 import com.example.ui.RealTimeCurrencyConversionTool
@@ -172,6 +173,7 @@ class MainActivity : ComponentActivity() {
                         val isPartnerJoinOpen by viewModel.isPartnerJoinOpen.collectAsStateWithLifecycle()
                         val isPayoutModalOpen by viewModel.isPayoutModalOpen.collectAsStateWithLifecycle()
                         val isOwnerPayoutScreenOpen by viewModel.isOwnerPayoutScreenOpen.collectAsStateWithLifecycle()
+                        val isPayoutHistoryScreenOpen by viewModel.isPayoutHistoryScreenOpen.collectAsStateWithLifecycle()
                         val isCurrencyConverterModalOpen by viewModel.isCurrencyConverterModalOpen.collectAsStateWithLifecycle()
                         val isSecurityDefenseModalOpen by viewModel.isSecurityDefenseModalOpen.collectAsStateWithLifecycle()
                         val deepLinkBanner by viewModel.deepLinkBanner.collectAsStateWithLifecycle()
@@ -333,6 +335,21 @@ class MainActivity : ComponentActivity() {
                                 viewModel = viewModel,
                                 modifier = Modifier.fillMaxSize(),
                                 onBack = { viewModel.closeOwnerPayoutSection() }
+                            )
+                        }
+                    }
+
+                    if (isPayoutHistoryScreenOpen) {
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(MaterialTheme.colorScheme.background),
+                            color = MaterialTheme.colorScheme.background
+                        ) {
+                            PayoutHistoryScreen(
+                                viewModel = viewModel,
+                                onBack = { viewModel.closePayoutHistoryScreen() },
+                                modifier = Modifier.fillMaxSize()
                             )
                         }
                     }
@@ -2539,6 +2556,21 @@ fun EnhancedAccountSettingsView(
                             Icon(imageVector = Icons.Default.AccountBalance, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(text = "Open Owner Payout Section", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        }
+
+                        OutlinedButton(
+                            onClick = { viewModel.openPayoutHistoryScreen() },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(46.dp)
+                                .testTag("settings_open_payout_history_button"),
+                            shape = RoundedCornerShape(14.dp),
+                            border = BorderStroke(1.dp, CleanPrimary),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = CleanPrimary)
+                        ) {
+                            Icon(imageVector = Icons.Default.History, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(text = "Payout History & Totals (Room)", fontWeight = FontWeight.Bold, fontSize = 13.sp)
                         }
 
                         Row(
