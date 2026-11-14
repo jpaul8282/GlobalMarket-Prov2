@@ -113,6 +113,7 @@ fun OwnerPayoutSectionView(
     var isSimulatingWire by remember { mutableStateOf(false) }
     var lastSuccessRef by remember { mutableStateOf<String?>(null) }
     var showEditCredentialsDialog by remember { mutableStateOf(false) }
+    var showPayoutExportDialog by remember { mutableStateOf(false) }
 
     val parsedAmount = payoutAmountInput.toDoubleOrNull() ?: 0.0
     val calculatedFee = viewModel.calculatePayoutFee(activeMethod, parsedAmount)
@@ -1287,18 +1288,13 @@ fun OwnerPayoutSectionView(
 
                     if (payoutWireHistory.isNotEmpty()) {
                         TextButton(
-                            onClick = {
-                                val summary = payoutWireHistory.joinToString("\n") { rec ->
-                                    "${rec.referenceCode},${rec.transactionType},${rec.clearingRail},${rec.grossAmountUsd},${rec.netAmountUsd},${rec.currencyCode},${rec.ibanOrAccount},${rec.status}"
-                                }
-                                clipboardManager.setText(AnnotatedString(summary))
-                                Toast.makeText(context, "Payout & Wire Room records copied!", Toast.LENGTH_SHORT).show()
-                            },
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                            onClick = { showPayoutExportDialog = true },
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                            modifier = Modifier.testTag("owner_payout_export_button")
                         ) {
                             Icon(imageVector = Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(14.dp), tint = CleanPrimary)
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text(text = "Copy CSV", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = CleanPrimary)
+                            Text(text = "Export CSV / JSON", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = CleanPrimary)
                         }
                     }
                 }
@@ -1413,6 +1409,15 @@ fun OwnerPayoutSectionView(
             viewModel = viewModel,
             currentConfig = payoutConfig,
             onDismiss = { showEditCredentialsDialog = false }
+        )
+    }
+
+    // 7. PAYOUT HISTORY CSV / JSON CLIPBOARD EXPORT MODAL
+    if (showPayoutExportDialog) {
+        PayoutHistoryExportDialog(
+            allRecords = payoutWireHistory,
+            currencyFormatter = currencyFormatter,
+            onDismiss = { showPayoutExportDialog = false }
         )
     }
 }

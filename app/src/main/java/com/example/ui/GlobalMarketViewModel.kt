@@ -5,6 +5,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.data.*
+import com.example.util.PayoutExportFormat
+import com.example.util.PayoutExportScope
+import com.example.util.PayoutHistoryExporter
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -2259,6 +2262,32 @@ class GlobalMarketViewModel(
             started = SharingStarted.WhileSubscribed(5000),
             initialValue = 0.0
         )
+
+    suspend fun exportPayoutHistoryAsCsv(processedOnly: Boolean = true): String {
+        val records = if (processedOnly) {
+            repository.processedPayouts.first()
+        } else {
+            repository.allPayoutWireHistory.first()
+        }
+        return PayoutHistoryExporter.generateFormattedText(
+            records = records,
+            format = PayoutExportFormat.CSV,
+            scope = if (processedOnly) PayoutExportScope.PROCESSED_ONLY else PayoutExportScope.ALL_HISTORY
+        )
+    }
+
+    suspend fun exportPayoutHistoryAsJson(processedOnly: Boolean = true): String {
+        val records = if (processedOnly) {
+            repository.processedPayouts.first()
+        } else {
+            repository.allPayoutWireHistory.first()
+        }
+        return PayoutHistoryExporter.generateFormattedText(
+            records = records,
+            format = PayoutExportFormat.JSON,
+            scope = if (processedOnly) PayoutExportScope.PROCESSED_ONLY else PayoutExportScope.ALL_HISTORY
+        )
+    }
 
     // Currency Converter Feature State
     private val _converterTargetCurrency = MutableStateFlow(currencies[1]) // Default to EUR

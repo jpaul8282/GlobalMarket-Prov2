@@ -149,12 +149,13 @@ fun PayoutHistoryScreen(
     var activeSort by remember { mutableStateOf(PayoutHistorySort.NEWEST) }
     var isSortMenuOpen by remember { mutableStateOf(false) }
     var selectedRecord by remember { mutableStateOf<PayoutWireEntity?>(null) }
+    var showExportDialog by remember { mutableStateOf(false) }
 
-    BackHandler(enabled = selectedRecord != null || onBack != null) {
-        if (selectedRecord != null) {
-            selectedRecord = null
-        } else {
-            onBack?.invoke()
+    BackHandler(enabled = showExportDialog || selectedRecord != null || onBack != null) {
+        when {
+            showExportDialog -> showExportDialog = false
+            selectedRecord != null -> selectedRecord = null
+            else -> onBack?.invoke()
         }
     }
 
@@ -282,18 +283,7 @@ fun PayoutHistoryScreen(
                     ) {
                         if (allPayoutWires.isNotEmpty()) {
                             IconButton(
-                                onClick = {
-                                    val csv = buildString {
-                                        appendLine("Reference,Type,Method,ClearingRail,GrossUSD,FeeUSD,NetUSD,Converted,Currency,Recipient,Bank,IBAN,BIC,Status,Timestamp")
-                                        allPayoutWires.forEach { rec ->
-                                            appendLine(
-                                                "${rec.referenceCode},${rec.transactionType},${rec.method},\"${rec.clearingRail}\",${rec.grossAmountUsd},${rec.feeUsd},${rec.netAmountUsd},${rec.convertedAmount},${rec.currencyCode},\"${rec.recipientName}\",\"${rec.bankName}\",${rec.ibanOrAccount},${rec.swiftBic},${rec.status},${rec.timestamp}"
-                                            )
-                                        }
-                                    }
-                                    clipboardManager.setText(AnnotatedString(csv))
-                                    Toast.makeText(context, "Payout history CSV copied!", Toast.LENGTH_SHORT).show()
-                                },
+                                onClick = { showExportDialog = true },
                                 modifier = Modifier
                                     .minimumInteractiveComponentSize()
                                     .size(44.dp)
@@ -304,7 +294,7 @@ fun PayoutHistoryScreen(
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.ContentCopy,
-                                    contentDescription = "Copy Payout History CSV",
+                                    contentDescription = "Export Payout History as CSV or JSON",
                                     tint = CleanPrimary,
                                     modifier = Modifier.size(18.dp)
                                 )
@@ -479,7 +469,7 @@ fun PayoutHistoryScreen(
                 }
             }
 
-            // 5. SECTION HEADER + QUICK SIMULATE ACTION
+            // 5. SECTION HEADER + EXPORT & QUICK SIMULATE ACTIONS
             item {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -494,39 +484,66 @@ fun PayoutHistoryScreen(
                         letterSpacing = 0.8.sp
                     )
 
-                    TextButton(
-                        onClick = {
-                            viewModel.simulateBankWireTransfer(
-                                amountInUsd = 250.0,
-                                currencyCode = "EUR",
-                                method = "IDEAL",
-                                clearingRail = "iDEAL / SEPA Instant",
-                                notes = "Quick simulated bank wire from Payout History",
-                                onSuccess = { saved ->
-                                    Toast.makeText(
-                                        context,
-                                        "Simulated wire ${saved.referenceCode} saved",
-                                        Toast.LENGTH_SHORT
-                                    ).show()
-                                }
-                            )
-                        },
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                        modifier = Modifier.testTag("payout_history_quick_simulate_button")
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.SyncAlt,
-                            contentDescription = null,
-                            tint = CleanOrange,
-                            modifier = Modifier.size(14.dp)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(
-                            text = "Simulate iDEAL Wire",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = CleanOrangeText
-                        )
+                        if (allPayoutWires.isNotEmpty()) {
+                            TextButton(
+                                onClick = { showExportDialog = true },
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                modifier = Modifier.testTag("payout_history_export_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.ContentCopy,
+                                    contentDescription = null,
+                                    tint = CleanPrimary,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "Export CSV / JSON",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = CleanPrimary
+                                )
+                            }
+                        }
+
+                        TextButton(
+                            onClick = {
+                                viewModel.simulateBankWireTransfer(
+                                    amountInUsd = 250.0,
+                                    currencyCode = "EUR",
+                                    method = "IDEAL",
+                                    clearingRail = "iDEAL / SEPA Instant",
+                                    notes = "Quick simulated bank wire from Payout History",
+                                    onSuccess = { saved ->
+                                        Toast.makeText(
+                                            context,
+                                            "Simulated wire ${saved.referenceCode} saved",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    }
+                                )
+                            },
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                            modifier = Modifier.testTag("payout_history_quick_simulate_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.SyncAlt,
+                                contentDescription = null,
+                                tint = CleanOrange,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = "Simulate Wire",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = CleanOrangeText
+                            )
+                        }
                     }
                 }
             }
@@ -657,6 +674,14 @@ fun PayoutHistoryScreen(
                 selectedRecord = null
                 Toast.makeText(context, "Record ${record.referenceCode} deleted", Toast.LENGTH_SHORT).show()
             }
+        )
+    }
+
+    if (showExportDialog) {
+        PayoutHistoryExportDialog(
+            allRecords = allPayoutWires,
+            currencyFormatter = currencyFormatter,
+            onDismiss = { showExportDialog = false }
         )
     }
 }

@@ -1,9 +1,11 @@
 package com.example
 
+import android.content.ClipboardManager
 import android.content.Context
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -18,9 +20,16 @@ import com.example.ui.GlobalMarketViewModel
 import com.example.ui.PayoutHistoryScreen
 import com.example.ui.PayoutMethodType
 import com.example.ui.theme.MyApplicationTheme
+import com.example.util.PayoutExportFormat
+import com.example.util.PayoutExportScope
+import com.example.util.PayoutHistoryExporter
 import com.github.takahirom.roborazzi.RobolectricDeviceQualifiers
 import kotlinx.coroutines.runBlocking
+import org.json.JSONObject
 import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -35,13 +44,14 @@ class PayoutHistoryScreenTest {
     @get:Rule
     val composeTestRule = createComposeRule()
 
+    private lateinit var context: Context
     private lateinit var db: AppDatabase
     private lateinit var repository: TransactionRepository
     private lateinit var viewModel: GlobalMarketViewModel
 
     @Before
     fun setup() {
-        val context = ApplicationProvider.getApplicationContext<Context>()
+        context = ApplicationProvider.getApplicationContext()
         db = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java)
             .allowMainThreadQueries()
             .build()
@@ -150,5 +160,106 @@ class PayoutHistoryScreenTest {
         composeTestRule.waitUntil(timeoutMillis = 5000) {
             composeTestRule.onAllNodesWithText("1 Transactions").fetchSemanticsNodes().isNotEmpty()
         }
+    }
+
+    @Test
+    fun payoutHistoryScreen_exportsProcessedPayoutsToCsvAndJsonClipboard() {
+        runBlocking {
+            viewModel.saveDisbursePayout(
+                method = PayoutMethodType.BANK_WIRE,
+                amountInUsd = 800.0,
+                currencyCode = "EUR",
+                notes = "Processed payout, with comma"
+            )
+            viewModel.saveSimulatedBankWire(
+                amountInUsd = 150.0,
+                currencyCode = "EUR",
+                method = "IDEAL",
+                clearingRail = "iDEAL / SEPA Instant",
+                notes = "Simulated iDEAL test"
+            )
+        }
+
+        composeTestRule.setContent {
+            MyApplicationTheme {
+                PayoutHistoryScreen(
+                    viewModel = viewModel,
+                    onBack = {}
+                )
+            }
+        }
+
+        composeTestRule.waitUntil(timeoutMillis = 5000) {
+            composeTestRule.onAllNodesWithText("STORED TRANSACTIONS (2)").fetchSemanticsNodes().isNotEmpty()
+        }
+
+        // Open export modal
+        composeTestRule.onNodeWithTag("payout_history_export_button").performClick()
+        composeTestRule.waitUntil(timeoutMillis = 3000) {
+            composeTestRule.onAllNodesWithTag("payout_export_dialog").fetchSemanticsNodes().isNotEmpty()
+        }
+
+        // Default scope is Processed Payouts (1), default format is CSV
+        composeTestRule.onNodeWithTag("payout_export_copy_button").performClick()
+        composeTestRule.waitForIdle()
+
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        val csvText = clipboard.primaryClip?.getItemAt(0)?.text?.toString().orEmpty()
+        assertTrue(csvText.contains("referenceCode,transactionType,method"))
+        assertTrue(csvText.contains("PROCESSED_PAYOUT"))
+        assertTrue(csvText.contains("\"Processed payout, with comma\""))
+        assertFalse(csvText.contains("SIMULATED_BANK_WIRE"))
+
+        // Switch to JSON format and copy processed payouts JSON
+        composeTestRule.onNodeWithTag("payout_export_format_json").performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("payout_export_copy_button").performClick()
+        composeTestRule.waitForIdle()
+
+        val jsonText = clipboard.primaryClip?.getItemAt(0)?.text?.toString().orEmpty()
+        val parsed = JSONObject(jsonText)
+        assertEquals("PROCESSED_ONLY", parsed.getString("scope"))
+        assertEquals(1, parsed.getJSONObject("summary").getInt("totalRecords"))
+        val records = parsed.getJSONArray("records")
+        assertEquals(1, records.length())
+        assertEquals("PROCESSED_PAYOUT", records.getJSONObject(0).getString("transactionType"))
+        assertEquals("Processed payout, with comma", records.getJSONObject(0).getString("notes"))
+
+        // Switch scope to All History (2) and verify ViewModel helpers as well
+        composeTestRule.onNodeWithTag("payout_export_scope_all").performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("payout_export_copy_button").performClick()
+        composeTestRule.waitForIdle()
+
+        val allJsonText = clipboard.primaryClip?.getItemAt(0)?.text?.toString().orEmpty()
+        val parsedAll = JSONObject(allJsonText)
+        assertEquals(2, parsedAll.getJSONArray("records").length())
+
+        runBlocking {
+            val vmCsv = viewModel.exportPayoutHistoryAsCsv(processedOnly = true)
+            val vmJson = viewModel.exportPayoutHistoryAsJson(processedOnly = false)
+            assertTrue(vmCsv.contains("PROCESSED_PAYOUT"))
+            assertFalse(vmCsv.contains("SIMULATED_BANK_WIRE"))
+            assertEquals(2, JSONObject(vmJson).getJSONArray("records").length())
+        }
+    }
+
+    @Test
+    fun payoutHistoryExporter_handlesEmptyListCleanly() {
+        val emptyCsv = PayoutHistoryExporter.generateFormattedText(
+            records = emptyList(),
+            format = PayoutExportFormat.CSV,
+            scope = PayoutExportScope.PROCESSED_ONLY
+        )
+        assertTrue(emptyCsv.startsWith("id,referenceCode,transactionType"))
+
+        val emptyJson = PayoutHistoryExporter.generateFormattedText(
+            records = emptyList(),
+            format = PayoutExportFormat.JSON,
+            scope = PayoutExportScope.PROCESSED_ONLY
+        )
+        val parsed = JSONObject(emptyJson)
+        assertEquals(0, parsed.getJSONObject("summary").getInt("totalRecords"))
+        assertEquals(0, parsed.getJSONArray("records").length())
     }
 }
