@@ -4,13 +4,15 @@ import android.content.ClipboardManager
 import android.content.Context
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextContains
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextInput
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
@@ -100,9 +102,9 @@ class PayoutHistoryScreenTest {
             }
         }
 
-        // Wait for Room Flow to emit into Compose StateFlow
+        // Wait for Room Flow to emit into Compose StateFlow (hero card is always above the fold)
         composeTestRule.waitUntil(timeoutMillis = 5000) {
-            composeTestRule.onAllNodesWithText("STORED TRANSACTIONS (2)").fetchSemanticsNodes().isNotEmpty()
+            composeTestRule.onAllNodesWithText("2 Transactions").fetchSemanticsNodes().isNotEmpty()
         }
 
         // Verify Summary Hero Card & Total Processed Transactions
@@ -112,12 +114,18 @@ class PayoutHistoryScreenTest {
             .assertTextContains("2 Transactions")
         composeTestRule.onNodeWithTag("payout_summary_net_usd").assertIsDisplayed()
 
-        // Verify both items are displayed
+        // Scroll LazyColumn to reach items below Daily Trends Chart
+        composeTestRule.onNodeWithTag("payout_history_lazy_column")
+            .performScrollToNode(hasText("STORED TRANSACTIONS (2)"))
         composeTestRule.onNodeWithText("STORED TRANSACTIONS (2)").assertIsDisplayed()
 
         // Filter by Simulated Wires
+        composeTestRule.onNodeWithTag("payout_history_lazy_column")
+            .performScrollToNode(hasTestTag("payout_history_chip_SIMULATED"))
         composeTestRule.onNodeWithTag("payout_history_chip_SIMULATED").performClick()
         composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("payout_history_lazy_column")
+            .performScrollToNode(hasText("STORED TRANSACTIONS (1)"))
         composeTestRule.onNodeWithText("STORED TRANSACTIONS (1)").assertIsDisplayed()
 
         // Filter by Processed Payouts
@@ -128,8 +136,12 @@ class PayoutHistoryScreenTest {
         // Return to All and test Search
         composeTestRule.onNodeWithTag("payout_history_chip_ALL").performClick()
         composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("payout_history_lazy_column")
+            .performScrollToNode(hasTestTag("payout_history_search_input"))
         composeTestRule.onNodeWithTag("payout_history_search_input").performTextInput("iDEAL")
         composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("payout_history_lazy_column")
+            .performScrollToNode(hasText("STORED TRANSACTIONS (1)"))
         composeTestRule.onNodeWithText("STORED TRANSACTIONS (1)").assertIsDisplayed()
     }
 
@@ -148,13 +160,15 @@ class PayoutHistoryScreenTest {
 
         composeTestRule.onNodeWithTag("payout_summary_total_count")
             .assertTextContains("0 Transactions")
+        composeTestRule.onNodeWithTag("payout_history_lazy_column")
+            .performScrollToNode(hasTestTag("payout_history_empty_state"))
         composeTestRule.onNodeWithTag("payout_history_empty_state")
-            .performScrollTo()
             .assertIsDisplayed()
 
         // Click simulate from empty state
+        composeTestRule.onNodeWithTag("payout_history_lazy_column")
+            .performScrollToNode(hasTestTag("payout_history_empty_simulate_button"))
         composeTestRule.onNodeWithTag("payout_history_empty_simulate_button")
-            .performScrollTo()
             .performClick()
 
         composeTestRule.waitUntil(timeoutMillis = 5000) {
@@ -190,10 +204,12 @@ class PayoutHistoryScreenTest {
         }
 
         composeTestRule.waitUntil(timeoutMillis = 5000) {
-            composeTestRule.onAllNodesWithText("STORED TRANSACTIONS (2)").fetchSemanticsNodes().isNotEmpty()
+            composeTestRule.onAllNodesWithText("2 Transactions").fetchSemanticsNodes().isNotEmpty()
         }
 
-        // Open export modal
+        // Scroll LazyColumn to export button below the chart and open export modal
+        composeTestRule.onNodeWithTag("payout_history_lazy_column")
+            .performScrollToNode(hasTestTag("payout_history_export_button"))
         composeTestRule.onNodeWithTag("payout_history_export_button").performClick()
         composeTestRule.waitUntil(timeoutMillis = 3000) {
             composeTestRule.onAllNodesWithTag("payout_export_dialog").fetchSemanticsNodes().isNotEmpty()

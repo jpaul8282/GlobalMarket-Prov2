@@ -225,7 +225,8 @@ fun PayoutHistoryScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .widthIn(max = 600.dp)
-                .padding(horizontal = 16.dp),
+                .padding(horizontal = 16.dp)
+                .testTag("payout_history_lazy_column"),
             verticalArrangement = Arrangement.spacedBy(14.dp),
             contentPadding = PaddingValues(top = 12.dp, bottom = 32.dp)
         ) {
@@ -317,6 +318,14 @@ fun PayoutHistoryScreen(
                     totalGrossUsd = summaryGrossUsd,
                     totalFeesUsd = summaryFeesUsd,
                     distinctRails = distinctRails,
+                    currencyFormatter = currencyFormatter
+                )
+            }
+
+            // 2B. DAILY PAYOUT TRENDS CHART (BAR & LINE MODES)
+            item {
+                PayoutDailyTrendsChart(
+                    records = allPayoutWires,
                     currencyFormatter = currencyFormatter
                 )
             }

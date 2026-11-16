@@ -10,13 +10,18 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.automirrored.filled.Launch
 import androidx.compose.material.icons.automirrored.filled.ReceiptLong
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -116,11 +121,42 @@ fun OwnerPayoutSectionView(
     var showEditCredentialsDialog by remember { mutableStateOf(false) }
     var showPayoutExportDialog by remember { mutableStateOf(false) }
 
+    val listState = rememberLazyListState()
     val parsedAmount = payoutAmountInput.toDoubleOrNull() ?: 0.0
     val calculatedFee = viewModel.calculatePayoutFee(activeMethod, parsedAmount)
     val netDisbursement = (parsedAmount - calculatedFee).coerceAtLeast(0.0)
 
+    val triggerQuickSimulatedWire: () -> Unit = {
+        val simAmount = if (parsedAmount > 0.0) parsedAmount else 250.0
+        isSimulatingWire = true
+        scope.launch {
+            delay(350)
+            viewModel.simulateBankWireTransfer(
+                amountInUsd = simAmount,
+                currencyCode = selectedPayoutCurrency.code,
+                method = "IDEAL",
+                clearingRail = "iDEAL / SEPA Instant",
+                recipientName = payoutConfig.bankWire.accountHolderName,
+                bankName = payoutConfig.bankWire.bankName,
+                ibanOrAccount = payoutConfig.bankWire.accountNumberOrIban,
+                swiftBic = payoutConfig.bankWire.swiftBic,
+                country = payoutConfig.bankWire.country,
+                notes = "Simulated iDEAL & ING Bank SEPA wire",
+                onSuccess = { saved ->
+                    lastSuccessRef = saved.referenceCode
+                    isSimulatingWire = false
+                    Toast.makeText(
+                        context,
+                        "Simulated Bank Wire ${saved.referenceCode} saved!",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+            )
+        }
+    }
+
     LazyColumn(
+        state = listState,
         modifier = modifier
             .fillMaxSize()
             .testTag("owner_payout_section_view")
@@ -152,14 +188,15 @@ fun OwnerPayoutSectionView(
                             IconButton(
                                 onClick = onBack,
                                 modifier = Modifier
-                                    .size(38.dp)
+                                    .minimumInteractiveComponentSize()
+                                    .size(44.dp)
                                     .clip(CircleShape)
                                     .background(CleanSurfaceVariant)
                                     .border(BorderStroke(1.dp, CleanBorder), CircleShape)
                                     .testTag("owner_payout_back_button")
                             ) {
                                 Icon(
-                                    imageVector = Icons.Default.ArrowBack,
+                                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                                     contentDescription = "Back",
                                     tint = CleanPrimary,
                                     modifier = Modifier.size(18.dp)
@@ -208,7 +245,8 @@ fun OwnerPayoutSectionView(
                         IconButton(
                             onClick = { viewModel.openPayoutHistoryScreen() },
                             modifier = Modifier
-                                .size(38.dp)
+                                .minimumInteractiveComponentSize()
+                                .size(44.dp)
                                 .clip(CircleShape)
                                 .background(CleanSurfaceVariant)
                                 .border(BorderStroke(1.dp, CleanBorder), CircleShape)
@@ -226,14 +264,15 @@ fun OwnerPayoutSectionView(
                         IconButton(
                             onClick = { viewModel.openPayoutModal() },
                             modifier = Modifier
-                                .size(38.dp)
+                                .minimumInteractiveComponentSize()
+                                .size(44.dp)
                                 .clip(CircleShape)
                                 .background(CleanPrimaryContainer)
                                 .border(BorderStroke(1.dp, CleanBorder), CircleShape)
                                 .testTag("owner_open_modal_button")
                         ) {
                             Icon(
-                                imageVector = Icons.Default.Launch,
+                                imageVector = Icons.AutoMirrored.Filled.Launch,
                                 contentDescription = "Open Full Modal",
                                 tint = CleanPrimary,
                                 modifier = Modifier.size(18.dp)
@@ -365,11 +404,323 @@ fun OwnerPayoutSectionView(
                                 color = CleanOnPrimary.copy(alpha = 0.75f)
                             )
                             Text(
-                                text = "${payoutLogs.size} records",
+                                text = "${payoutWireHistory.size.coerceAtLeast(payoutLogs.size)} records",
                                 fontSize = 14.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = CleanOnPrimary
                             )
+                        }
+                    }
+
+                    // Vault Action Buttons
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Button(
+                            onClick = {
+                                if (availablePayoutBalanceUsd > 0.0) {
+                                    payoutAmountInput = String.format(Locale.US, "%.2f", availablePayoutBalanceUsd)
+                                }
+                                val disburseIndex = if (lastSuccessRef != null) 7 else 6
+                                scope.launch { listState.animateScrollToItem(disburseIndex) }
+                            },
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(48.dp)
+                                .testTag("vault_disburse_max_btn"),
+                            shape = RoundedCornerShape(14.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color.White,
+                                contentColor = CleanPrimary
+                            )
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.Send,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = if (availablePayoutBalanceUsd > 0.0) "Disburse Max" else "New Payout",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+
+                        OutlinedButton(
+                            onClick = { viewModel.openPayoutHistoryScreen() },
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(48.dp)
+                                .testTag("vault_view_history_btn"),
+                            shape = RoundedCornerShape(14.dp),
+                            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.6f)),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = CleanOnPrimary)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.History,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Ledger (${payoutWireHistory.size})",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2A. OWNER PAYOUT ACTION BUTTONS HUB
+        item {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("owner_payout_action_buttons_card"),
+                shape = RoundedCornerShape(22.dp),
+                colors = CardDefaults.cardColors(containerColor = CleanSurface),
+                border = BorderStroke(1.dp, CleanBorder)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "QUICK PAYOUT CONTROLS",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = CleanTextMuted,
+                            letterSpacing = 0.8.sp
+                        )
+                        Text(
+                            text = "Active: ${activeMethod.displayName}",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = CleanPrimary
+                        )
+                    }
+
+                    // Primary Rail Switch Buttons
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Button(
+                            onClick = {
+                                activeMethod = PayoutMethodType.BANK_WIRE
+                                viewModel.selectPayoutMethod(PayoutMethodType.BANK_WIRE)
+                            },
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(48.dp)
+                                .testTag("payout_hub_btn_wire"),
+                            contentPadding = PaddingValues(horizontal = 8.dp),
+                            shape = RoundedCornerShape(14.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (activeMethod == PayoutMethodType.BANK_WIRE) CleanPrimary else CleanSurfaceVariant,
+                                contentColor = if (activeMethod == PayoutMethodType.BANK_WIRE) CleanOnPrimary else CleanTextPrimary
+                            )
+                        ) {
+                            Icon(imageVector = Icons.Default.AccountBalance, contentDescription = null, modifier = Modifier.size(15.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Bank Wire", fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+
+                        Button(
+                            onClick = {
+                                activeMethod = PayoutMethodType.PAYPAL
+                                viewModel.selectPayoutMethod(PayoutMethodType.PAYPAL)
+                            },
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(48.dp)
+                                .testTag("payout_hub_btn_paypal"),
+                            contentPadding = PaddingValues(horizontal = 8.dp),
+                            shape = RoundedCornerShape(14.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (activeMethod == PayoutMethodType.PAYPAL) CleanPrimary else CleanSurfaceVariant,
+                                contentColor = if (activeMethod == PayoutMethodType.PAYPAL) CleanOnPrimary else CleanTextPrimary
+                            )
+                        ) {
+                            Icon(imageVector = Icons.Default.Payments, contentDescription = null, modifier = Modifier.size(15.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("PayPal", fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+
+                        Button(
+                            onClick = {
+                                activeMethod = PayoutMethodType.STRIPE_PAYOUT
+                                viewModel.selectPayoutMethod(PayoutMethodType.STRIPE_PAYOUT)
+                                viewModel.refreshStripeBalanceAndPayouts()
+                            },
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(48.dp)
+                                .testTag("payout_hub_btn_stripe"),
+                            contentPadding = PaddingValues(horizontal = 8.dp),
+                            shape = RoundedCornerShape(14.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (activeMethod == PayoutMethodType.STRIPE_PAYOUT) CleanSecondary else CleanSurfaceVariant,
+                                contentColor = if (activeMethod == PayoutMethodType.STRIPE_PAYOUT) CleanOnPrimary else CleanTextPrimary
+                            )
+                        ) {
+                            Icon(imageVector = Icons.Default.Bolt, contentDescription = null, modifier = Modifier.size(15.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Stripe", fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+
+                    // Instant Action Row: Simulate iDEAL Wire + Sync Stripe API
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = { triggerQuickSimulatedWire() },
+                            enabled = !isSimulatingWire && !isDisbursing,
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(48.dp)
+                                .testTag("payout_hub_btn_simulate_ideal"),
+                            shape = RoundedCornerShape(14.dp),
+                            border = BorderStroke(1.dp, CleanOrange.copy(alpha = 0.7f)),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = CleanOrangeText),
+                            contentPadding = PaddingValues(horizontal = 10.dp)
+                        ) {
+                            Icon(imageVector = Icons.Default.SyncAlt, contentDescription = null, tint = CleanOrange, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = if (isSimulatingWire) "Simulating..." else "Simulate iDEAL",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+
+                        OutlinedButton(
+                            onClick = {
+                                viewModel.refreshStripeBalanceAndPayouts()
+                                scope.launch { listState.animateScrollToItem(5) }
+                            },
+                            enabled = !stripePayoutState.isLoadingBalance,
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(48.dp)
+                                .testTag("payout_hub_btn_sync_stripe"),
+                            shape = RoundedCornerShape(14.dp),
+                            border = BorderStroke(1.dp, CleanSecondary.copy(alpha = 0.7f)),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = CleanSecondary),
+                            contentPadding = PaddingValues(horizontal = 10.dp)
+                        ) {
+                            Icon(imageVector = Icons.Default.CloudSync, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = if (stripePayoutState.isLoadingBalance) "Syncing..." else "Sync Stripe API",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+
+                    // Utility Shortcuts Bar
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        item {
+                            FilledTonalButton(
+                                onClick = { viewModel.openPayoutHistoryScreen() },
+                                modifier = Modifier
+                                    .height(48.dp)
+                                    .testTag("payout_hub_btn_history"),
+                                shape = RoundedCornerShape(12.dp),
+                                contentPadding = PaddingValues(horizontal = 12.dp)
+                            ) {
+                                Icon(imageVector = Icons.Default.History, contentDescription = null, modifier = Modifier.size(15.dp))
+                                Spacer(modifier = Modifier.width(5.dp))
+                                Text("Full History", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                        item {
+                            FilledTonalButton(
+                                onClick = { showPayoutExportDialog = true },
+                                modifier = Modifier
+                                    .height(48.dp)
+                                    .testTag("payout_hub_btn_export"),
+                                shape = RoundedCornerShape(12.dp),
+                                contentPadding = PaddingValues(horizontal = 12.dp)
+                            ) {
+                                Icon(imageVector = Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(15.dp))
+                                Spacer(modifier = Modifier.width(5.dp))
+                                Text("Export CSV/JSON", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                        item {
+                            FilledTonalButton(
+                                onClick = {
+                                    if (payoutWireHistory.isNotEmpty()) {
+                                        val chartIdx = if (lastSuccessRef != null) 8 else 7
+                                        scope.launch { listState.animateScrollToItem(chartIdx) }
+                                    } else {
+                                        viewModel.openPayoutHistoryScreen()
+                                    }
+                                },
+                                modifier = Modifier
+                                    .height(48.dp)
+                                    .testTag("payout_hub_btn_trends"),
+                                shape = RoundedCornerShape(12.dp),
+                                contentPadding = PaddingValues(horizontal = 12.dp)
+                            ) {
+                                Icon(imageVector = Icons.Default.BarChart, contentDescription = null, modifier = Modifier.size(15.dp))
+                                Spacer(modifier = Modifier.width(5.dp))
+                                Text("Daily Trends", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                        item {
+                            FilledTonalButton(
+                                onClick = { showEditCredentialsDialog = true },
+                                modifier = Modifier
+                                    .height(48.dp)
+                                    .testTag("payout_hub_btn_edit_accounts"),
+                                shape = RoundedCornerShape(12.dp),
+                                contentPadding = PaddingValues(horizontal = 12.dp)
+                            ) {
+                                Icon(imageVector = Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(15.dp))
+                                Spacer(modifier = Modifier.width(5.dp))
+                                Text("Edit Accounts", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                        item {
+                            FilledTonalButton(
+                                onClick = { viewModel.openPayoutModal() },
+                                modifier = Modifier
+                                    .height(48.dp)
+                                    .testTag("payout_hub_btn_modal"),
+                                shape = RoundedCornerShape(12.dp),
+                                contentPadding = PaddingValues(horizontal = 12.dp)
+                            ) {
+                                Icon(imageVector = Icons.AutoMirrored.Filled.Launch, contentDescription = null, modifier = Modifier.size(15.dp))
+                                Spacer(modifier = Modifier.width(5.dp))
+                                Text("Rail Settings", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
                         }
                     }
                 }
@@ -778,16 +1129,35 @@ fun OwnerPayoutSectionView(
                             }
                         }
 
-                        IconButton(
-                            onClick = { lastSuccessRef = null },
-                            modifier = Modifier.size(28.dp)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.Close,
-                                contentDescription = "Dismiss",
-                                tint = CleanOnTertiaryContainer,
-                                modifier = Modifier.size(16.dp)
-                            )
+                            TextButton(
+                                onClick = {
+                                    lastSuccessRef?.let {
+                                        clipboardManager.setText(AnnotatedString(it))
+                                        Toast.makeText(context, "Copied ref $it", Toast.LENGTH_SHORT).show()
+                                    }
+                                },
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                modifier = Modifier.testTag("payout_success_copy_ref_button")
+                            ) {
+                                Text("Copy Ref", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = CleanTertiary)
+                            }
+                            IconButton(
+                                onClick = { lastSuccessRef = null },
+                                modifier = Modifier
+                                    .minimumInteractiveComponentSize()
+                                    .size(36.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Dismiss",
+                                    tint = CleanOnTertiaryContainer,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
                         }
                     }
                 }
@@ -1151,10 +1521,11 @@ fun OwnerPayoutSectionView(
                                     shape = RoundedCornerShape(12.dp),
                                     color = if (isSelected) CleanPrimaryContainer else CleanSurfaceVariant,
                                     border = BorderStroke(1.dp, if (isSelected) CleanPrimary else CleanBorderSubtle),
-                                    modifier = Modifier.weight(1f)
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(42.dp)
                                 ) {
                                     Box(
-                                        modifier = Modifier.padding(vertical = 8.dp),
                                         contentAlignment = Alignment.Center
                                     ) {
                                         Text(
@@ -1165,6 +1536,62 @@ fun OwnerPayoutSectionView(
                                         )
                                     }
                                 }
+                            }
+                        }
+
+                        // Balance Percentage Split & Clear Buttons
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            listOf(
+                                "25%" to 0.25,
+                                "50%" to 0.50,
+                                "75%" to 0.75,
+                                "MAX" to 1.00
+                            ).forEach { (label, factor) ->
+                                OutlinedButton(
+                                    onClick = {
+                                        val computed = (availablePayoutBalanceUsd * factor).coerceAtLeast(0.0)
+                                        if (computed > 0.0) {
+                                            payoutAmountInput = String.format(Locale.US, "%.2f", computed)
+                                        } else {
+                                            Toast.makeText(context, "Available balance is $0.00 — enter custom amount", Toast.LENGTH_SHORT).show()
+                                        }
+                                    },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(40.dp)
+                                        .testTag("payout_split_${label.lowercase().replace("%", "")}"),
+                                    shape = RoundedCornerShape(10.dp),
+                                    contentPadding = PaddingValues(horizontal = 4.dp),
+                                    border = BorderStroke(1.dp, CleanBorderSubtle)
+                                ) {
+                                    Text(
+                                        text = label,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = CleanPrimary
+                                    )
+                                }
+                            }
+
+                            OutlinedButton(
+                                onClick = { payoutAmountInput = "" },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(40.dp)
+                                    .testTag("payout_split_clear"),
+                                shape = RoundedCornerShape(10.dp),
+                                contentPadding = PaddingValues(horizontal = 4.dp),
+                                border = BorderStroke(1.dp, CleanBorderSubtle)
+                            ) {
+                                Text(
+                                    text = "Clear",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = CleanTextSecondary
+                                )
                             }
                         }
                     }
@@ -1329,34 +1756,7 @@ fun OwnerPayoutSectionView(
 
                     // F. Simulate iDEAL / SEPA Bank Wire Action Button
                     OutlinedButton(
-                        onClick = {
-                            val simAmount = if (parsedAmount > 0.0) parsedAmount else 250.0
-                            isSimulatingWire = true
-                            scope.launch {
-                                delay(400)
-                                viewModel.simulateBankWireTransfer(
-                                    amountInUsd = simAmount,
-                                    currencyCode = selectedPayoutCurrency.code,
-                                    method = "IDEAL",
-                                    clearingRail = "iDEAL / SEPA Instant",
-                                    recipientName = payoutConfig.bankWire.accountHolderName,
-                                    bankName = payoutConfig.bankWire.bankName,
-                                    ibanOrAccount = payoutConfig.bankWire.accountNumberOrIban,
-                                    swiftBic = payoutConfig.bankWire.swiftBic,
-                                    country = payoutConfig.bankWire.country,
-                                    notes = "Simulated iDEAL & ING Bank SEPA wire test",
-                                    onSuccess = { saved ->
-                                        lastSuccessRef = saved.referenceCode
-                                        isSimulatingWire = false
-                                        Toast.makeText(
-                                            context,
-                                            "Simulated Bank Wire ${saved.referenceCode} saved to Room!",
-                                            Toast.LENGTH_SHORT
-                                        ).show()
-                                    }
-                                )
-                            }
-                        },
+                        onClick = { triggerQuickSimulatedWire() },
                         enabled = !isSimulatingWire && !isDisbursing,
                         modifier = Modifier
                             .fillMaxWidth()
@@ -1390,6 +1790,16 @@ fun OwnerPayoutSectionView(
                         }
                     }
                 }
+            }
+        }
+
+        // 4B. DAILY PAYOUT TRENDS CHART (ROOM DATABASE)
+        if (payoutWireHistory.isNotEmpty()) {
+            item {
+                PayoutDailyTrendsChart(
+                    records = payoutWireHistory,
+                    currencyFormatter = currencyFormatter
+                )
             }
         }
 
@@ -1495,6 +1905,36 @@ fun OwnerPayoutSectionView(
                             color = CleanTextSecondary,
                             modifier = Modifier.padding(horizontal = 16.dp)
                         )
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Button(
+                                onClick = { triggerQuickSimulatedWire() },
+                                enabled = !isSimulatingWire && !isDisbursing,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(48.dp)
+                                    .testTag("owner_empty_simulate_wire_btn"),
+                                shape = RoundedCornerShape(14.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = CleanOrange)
+                            ) {
+                                Text("Simulate Wire", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            }
+                            OutlinedButton(
+                                onClick = { viewModel.refreshStripeBalanceAndPayouts() },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(48.dp)
+                                    .testTag("owner_empty_sync_stripe_btn"),
+                                shape = RoundedCornerShape(14.dp),
+                                border = BorderStroke(1.dp, CleanSecondary)
+                            ) {
+                                Text("Sync Stripe", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = CleanSecondary)
+                            }
+                        }
                     }
                 }
             }
@@ -1676,17 +2116,45 @@ fun PayoutWireHistoryCard(
                     modifier = Modifier.weight(1f)
                 )
 
-                Surface(
-                    shape = RoundedCornerShape(6.dp),
-                    color = CleanSuccessContainer
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = record.status,
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = CleanSuccess,
-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                    )
+                    val itemClipboard = LocalClipboardManager.current
+                    val itemContext = LocalContext.current
+                    TextButton(
+                        onClick = {
+                            itemClipboard.setText(AnnotatedString(record.referenceCode))
+                            Toast.makeText(itemContext, "Copied ${record.referenceCode}", Toast.LENGTH_SHORT).show()
+                        },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                        modifier = Modifier.testTag("payout_wire_copy_ref_${record.id}")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ContentCopy,
+                            contentDescription = "Copy reference code",
+                            tint = CleanPrimary,
+                            modifier = Modifier.size(12.dp)
+                        )
+                        Spacer(modifier = Modifier.width(3.dp))
+                        Text("Copy Ref", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = CleanPrimary)
+                    }
+
+                    Surface(
+                        onClick = onToggleStatus,
+                        shape = RoundedCornerShape(8.dp),
+                        color = CleanSuccessContainer,
+                        border = BorderStroke(1.dp, CleanSuccess.copy(alpha = 0.3f)),
+                        modifier = Modifier.testTag("payout_wire_toggle_status_${record.id}")
+                    ) {
+                        Text(
+                            text = record.status,
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = CleanSuccess,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
                 }
             }
         }

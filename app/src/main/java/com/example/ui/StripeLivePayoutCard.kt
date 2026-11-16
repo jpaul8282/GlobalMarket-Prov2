@@ -45,6 +45,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -168,7 +169,9 @@ fun StripeLivePayoutCard(
                             else -> CleanTertiary.copy(alpha = 0.45f)
                         }
                     ),
-                    modifier = Modifier.testTag("stripe_env_badge")
+                    modifier = Modifier
+                        .testTag("stripe_env_badge")
+                        .semantics(mergeDescendants = true) {}
                 ) {
                     Text(
                         text = stripeState.environmentLabel,
