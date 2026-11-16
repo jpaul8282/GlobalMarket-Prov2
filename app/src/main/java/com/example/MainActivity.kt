@@ -2510,28 +2510,32 @@ fun EnhancedAccountSettingsView(
                                 contentAlignment = Alignment.Center
                             ) {
                                 Icon(
-                                    imageVector = if (payoutConfig.selectedMethod == PayoutMethodType.BANK_WIRE) Icons.Default.AccountBalance else Icons.Default.Payments,
+                                    imageVector = when (payoutConfig.selectedMethod) {
+                                        PayoutMethodType.BANK_WIRE -> Icons.Default.AccountBalance
+                                        PayoutMethodType.PAYPAL -> Icons.Default.Payments
+                                        PayoutMethodType.STRIPE_PAYOUT -> Icons.Default.Bolt
+                                    },
                                     contentDescription = null,
-                                    tint = CleanPrimary,
+                                    tint = if (payoutConfig.selectedMethod == PayoutMethodType.STRIPE_PAYOUT) CleanSecondary else CleanPrimary,
                                     modifier = Modifier.size(20.dp)
                                 )
                             }
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = if (payoutConfig.selectedMethod == PayoutMethodType.BANK_WIRE) {
-                                        "${payoutConfig.bankWire.bankName} • ${payoutConfig.bankWire.accountHolderName}"
-                                    } else {
-                                        "PayPal • ${payoutConfig.payPal.paypalEmailOrId}"
+                                    text = when (payoutConfig.selectedMethod) {
+                                        PayoutMethodType.BANK_WIRE -> "${payoutConfig.bankWire.bankName} • ${payoutConfig.bankWire.accountHolderName}"
+                                        PayoutMethodType.PAYPAL -> "PayPal • ${payoutConfig.payPal.paypalEmailOrId}"
+                                        PayoutMethodType.STRIPE_PAYOUT -> "Stripe Live Payouts API"
                                     },
                                     fontSize = 13.sp,
                                     fontWeight = FontWeight.SemiBold,
                                     color = CleanTextPrimary
                                 )
                                 Text(
-                                    text = if (payoutConfig.selectedMethod == PayoutMethodType.BANK_WIRE) {
-                                        "IBAN: ${payoutConfig.bankWire.accountNumberOrIban} • BIC: ${payoutConfig.bankWire.swiftBic}"
-                                    } else {
-                                        "PayPal ID: ${payoutConfig.payPal.phoneOrPaypalMe} • Instant Transfer"
+                                    text = when (payoutConfig.selectedMethod) {
+                                        PayoutMethodType.BANK_WIRE -> "IBAN: ${payoutConfig.bankWire.accountNumberOrIban} • BIC: ${payoutConfig.bankWire.swiftBic}"
+                                        PayoutMethodType.PAYPAL -> "PayPal ID: ${payoutConfig.payPal.phoneOrPaypalMe} • Instant Transfer"
+                                        PayoutMethodType.STRIPE_PAYOUT -> "Direct Stripe v1/payouts Settlement"
                                     },
                                     fontSize = 11.sp,
                                     color = CleanTextSecondary

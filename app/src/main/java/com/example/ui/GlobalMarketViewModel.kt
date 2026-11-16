@@ -84,8 +84,28 @@ data class MarketingCampaign(
 
 enum class PayoutMethodType(val id: String, val displayName: String, val subtitle: String) {
     BANK_WIRE("bank_wire", "Bank Wire Transfer", "SWIFT / IBAN / Direct Interbank Wire"),
-    PAYPAL("paypal", "PayPal", "Instant digital wallet payout")
+    PAYPAL("paypal", "PayPal", "Instant digital wallet payout"),
+    STRIPE_PAYOUT("stripe_payout", "Stripe Live Payout", "Stripe API v1/payouts (Standard / Instant)")
 }
+
+data class StripePayoutUiState(
+    val isKeyConfigured: Boolean = false,
+    val isLiveMode: Boolean = false,
+    val environmentLabel: String = "API KEY REQUIRED",
+    val maskedKeyPreview: String = "Not configured in Secrets",
+    val connectedAccountId: String? = null,
+    val selectedSpeedMethod: String = "standard", // "standard" or "instant"
+    val isLoadingBalance: Boolean = false,
+    val isSubmittingPayout: Boolean = false,
+    val isCancelingPayoutId: String? = null,
+    val availableBalances: List<StripeCurrencyBalance> = emptyList(),
+    val pendingBalances: List<StripeCurrencyBalance> = emptyList(),
+    val remotePayouts: List<StripePayoutItem> = emptyList(),
+    val lastStripePayout: StripePayoutItem? = null,
+    val statusMessage: String? = null,
+    val errorMessage: String? = null,
+    val lastSyncedEpochMs: Long? = null
+)
 
 data class BankWireDetails(
     val bankName: String = "ING Bank N.V.",
@@ -130,7 +150,8 @@ data class MerchantPayoutConfig(
 
 class GlobalMarketViewModel(
     private val repository: TransactionRepository,
-    private val firestoreRepository: com.example.data.FirestoreRepository? = null
+    private val firestoreRepository: com.example.data.FirestoreRepository? = null,
+    private val stripePayoutGateway: StripePayoutGateway = StripePayoutGateway()
 ) : ViewModel() {
 
     // Localization Translations
@@ -1633,6 +1654,17 @@ class GlobalMarketViewModel(
     private val _lastDisbursedPayoutReference = MutableStateFlow<String?>(null)
     val lastDisbursedPayoutReference: StateFlow<String?> = _lastDisbursedPayoutReference.asStateFlow()
 
+    private val _stripePayoutState = MutableStateFlow(
+        StripePayoutUiState(
+            isKeyConfigured = stripePayoutGateway.isConfigured(),
+            isLiveMode = stripePayoutGateway.isLiveKey(),
+            environmentLabel = stripePayoutGateway.environmentLabel(),
+            maskedKeyPreview = stripePayoutGateway.maskedKeyHint(),
+            connectedAccountId = stripePayoutGateway.resolvedConnectedAccountId()
+        )
+    )
+    val stripePayoutState: StateFlow<StripePayoutUiState> = _stripePayoutState.asStateFlow()
+
     fun openOwnerPayoutSection() {
         _isOwnerPayoutScreenOpen.value = true
     }
@@ -1684,7 +1716,11 @@ class GlobalMarketViewModel(
                 firestoreRepo.savePayoutSetting(
                     FirestorePayoutSetting(
                         userId = firestoreRepo.requireUserId(),
-                        selectedMethod = if (config.selectedMethod == PayoutMethodType.BANK_WIRE) "BANK_WIRE" else "PAYPAL",
+                        selectedMethod = when (config.selectedMethod) {
+                            PayoutMethodType.BANK_WIRE -> "BANK_WIRE"
+                            PayoutMethodType.PAYPAL -> "PAYPAL"
+                            PayoutMethodType.STRIPE_PAYOUT -> "STRIPE_PAYOUT"
+                        },
                         bankName = config.bankWire.bankName,
                         accountHolderName = config.bankWire.accountHolderName,
                         accountNumberOrIban = config.bankWire.accountNumberOrIban,
@@ -1701,12 +1737,25 @@ class GlobalMarketViewModel(
         }
     }
 
+    fun setStripePayoutSpeed(speedMethod: String) {
+        val normalized = if (speedMethod.equals("instant", ignoreCase = true)) "instant" else "standard"
+        _stripePayoutState.value = _stripePayoutState.value.copy(selectedSpeedMethod = normalized)
+    }
+
     fun calculatePayoutFee(method: PayoutMethodType, amountInUsd: Double): Double {
         return when (method) {
             PayoutMethodType.BANK_WIRE -> 15.00
             PayoutMethodType.PAYPAL -> {
                 val feeVal = (amountInUsd * 0.029) + 0.30
                 String.format(java.util.Locale.US, "%.2f", feeVal).toDoubleOrNull() ?: 1.75
+            }
+            PayoutMethodType.STRIPE_PAYOUT -> {
+                if (_stripePayoutState.value.selectedSpeedMethod == "instant") {
+                    val instantFee = (amountInUsd * 0.01).coerceAtLeast(0.50)
+                    String.format(java.util.Locale.US, "%.2f", instantFee).toDoubleOrNull() ?: 0.50
+                } else {
+                    0.00
+                }
             }
         }
     }
@@ -1715,13 +1764,26 @@ class GlobalMarketViewModel(
         method: PayoutMethodType = _payoutConfig.value.selectedMethod,
         amountInUsd: Double,
         currencyCode: String = _selectedCurrency.value.code,
-        recipientName: String = if (method == PayoutMethodType.BANK_WIRE) _payoutConfig.value.bankWire.accountHolderName else _payoutConfig.value.payPal.recipientName,
-        destinationIdentifier: String = if (method == PayoutMethodType.BANK_WIRE) _payoutConfig.value.bankWire.accountNumberOrIban else _payoutConfig.value.payPal.paypalEmailOrId,
+        recipientName: String = when (method) {
+            PayoutMethodType.BANK_WIRE -> _payoutConfig.value.bankWire.accountHolderName
+            PayoutMethodType.PAYPAL -> _payoutConfig.value.payPal.recipientName
+            PayoutMethodType.STRIPE_PAYOUT -> _payoutConfig.value.bankWire.accountHolderName
+        },
+        destinationIdentifier: String = when (method) {
+            PayoutMethodType.BANK_WIRE -> _payoutConfig.value.bankWire.accountNumberOrIban
+            PayoutMethodType.PAYPAL -> _payoutConfig.value.payPal.paypalEmailOrId
+            PayoutMethodType.STRIPE_PAYOUT -> stripePayoutGateway.resolvedConnectedAccountId()
+                ?: _payoutConfig.value.bankWire.accountNumberOrIban
+        },
         notes: String? = null
     ): TransactionEntity {
         val currency = currencies.find { it.code.equals(currencyCode, ignoreCase = true) } ?: _selectedCurrency.value
         val converted = amountInUsd * currency.exchangeRate
-        val prefix = if (method == PayoutMethodType.BANK_WIRE) "WIRE" else "PP"
+        val prefix = when (method) {
+            PayoutMethodType.BANK_WIRE -> "WIRE"
+            PayoutMethodType.PAYPAL -> "PP"
+            PayoutMethodType.STRIPE_PAYOUT -> "STRP"
+        }
         val refCode = "PO-$prefix-${(100000..999999).random()}"
         val finalRecipient = "Payout (${method.displayName}): $recipientName"
 
@@ -1739,7 +1801,11 @@ class GlobalMarketViewModel(
             logType = "PAYOUT",
             title = "Payout Disbursement (${method.displayName})",
             barcodeOrRawValue = destinationIdentifier,
-            barcodeFormat = if (method == PayoutMethodType.BANK_WIRE) "BANK_WIRE" else "PAYPAL",
+            barcodeFormat = when (method) {
+                PayoutMethodType.BANK_WIRE -> "BANK_WIRE"
+                PayoutMethodType.PAYPAL -> "PAYPAL"
+                PayoutMethodType.STRIPE_PAYOUT -> "STRIPE_PAYOUT"
+            },
             amount = converted,
             currencyCode = currency.code,
             amountInUsd = amountInUsd,
@@ -1779,7 +1845,11 @@ class GlobalMarketViewModel(
         val payoutWireRecord = PayoutWireEntity(
             referenceCode = refCode,
             transactionType = "PROCESSED_PAYOUT",
-            method = if (method == PayoutMethodType.BANK_WIRE) "BANK_WIRE" else "PAYPAL",
+            method = when (method) {
+                PayoutMethodType.BANK_WIRE -> "BANK_WIRE"
+                PayoutMethodType.PAYPAL -> "PAYPAL"
+                PayoutMethodType.STRIPE_PAYOUT -> "STRIPE_PAYOUT"
+            },
             grossAmountUsd = amountInUsd,
             feeUsd = feeVal,
             netAmountUsd = netUsd,
@@ -1787,13 +1857,25 @@ class GlobalMarketViewModel(
             currencyCode = currency.code,
             exchangeRate = currency.exchangeRate,
             recipientName = recipientName,
-            bankName = if (method == PayoutMethodType.BANK_WIRE) bankDetails.bankName else "PayPal Digital Wallet",
+            bankName = when (method) {
+                PayoutMethodType.BANK_WIRE -> bankDetails.bankName
+                PayoutMethodType.PAYPAL -> "PayPal Digital Wallet"
+                PayoutMethodType.STRIPE_PAYOUT -> "Stripe Treasury / Connected Bank"
+            },
             ibanOrAccount = destinationIdentifier,
-            swiftBic = if (method == PayoutMethodType.BANK_WIRE) bankDetails.swiftBic else "PAYPAL",
+            swiftBic = when (method) {
+                PayoutMethodType.BANK_WIRE -> bankDetails.swiftBic
+                PayoutMethodType.PAYPAL -> "PAYPAL"
+                PayoutMethodType.STRIPE_PAYOUT -> "STRIPE"
+            },
             routingNumber = if (method == PayoutMethodType.BANK_WIRE) bankDetails.routingNumber else "",
             intermediaryBank = if (method == PayoutMethodType.BANK_WIRE) bankDetails.intermediaryBank else "",
             country = if (method == PayoutMethodType.BANK_WIRE) bankDetails.country else currency.defaultCountry,
-            clearingRail = if (method == PayoutMethodType.BANK_WIRE) "SEPA Target2 / SWIFT" else "PayPal Instant",
+            clearingRail = when (method) {
+                PayoutMethodType.BANK_WIRE -> "SEPA Target2 / SWIFT"
+                PayoutMethodType.PAYPAL -> "PayPal Instant"
+                PayoutMethodType.STRIPE_PAYOUT -> "Stripe ${_stripePayoutState.value.selectedSpeedMethod.uppercase()} Payout"
+            },
             status = "COMPLETED",
             isSimulatedWire = false,
             timestamp = entity.timestamp,
@@ -1814,7 +1896,11 @@ class GlobalMarketViewModel(
                 val cloudRecord = com.example.data.FirestoreOwnerPayoutRecord(
                     userId = firestoreRepo.requireUserId(),
                     payoutId = refCode,
-                    method = if (method == PayoutMethodType.BANK_WIRE) "BANK_WIRE" else "PAYPAL",
+                    method = when (method) {
+                        PayoutMethodType.BANK_WIRE -> "BANK_WIRE"
+                        PayoutMethodType.PAYPAL -> "PAYPAL"
+                        PayoutMethodType.STRIPE_PAYOUT -> "STRIPE_PAYOUT"
+                    },
                     amount = converted,
                     fee = feeVal,
                     netAmount = net,
@@ -1837,8 +1923,17 @@ class GlobalMarketViewModel(
         method: PayoutMethodType = _payoutConfig.value.selectedMethod,
         amountInUsd: Double,
         currencyCode: String = _selectedCurrency.value.code,
-        recipientName: String = if (method == PayoutMethodType.BANK_WIRE) _payoutConfig.value.bankWire.accountHolderName else _payoutConfig.value.payPal.recipientName,
-        destinationIdentifier: String = if (method == PayoutMethodType.BANK_WIRE) _payoutConfig.value.bankWire.accountNumberOrIban else _payoutConfig.value.payPal.paypalEmailOrId,
+        recipientName: String = when (method) {
+            PayoutMethodType.BANK_WIRE -> _payoutConfig.value.bankWire.accountHolderName
+            PayoutMethodType.PAYPAL -> _payoutConfig.value.payPal.recipientName
+            PayoutMethodType.STRIPE_PAYOUT -> _payoutConfig.value.bankWire.accountHolderName
+        },
+        destinationIdentifier: String = when (method) {
+            PayoutMethodType.BANK_WIRE -> _payoutConfig.value.bankWire.accountNumberOrIban
+            PayoutMethodType.PAYPAL -> _payoutConfig.value.payPal.paypalEmailOrId
+            PayoutMethodType.STRIPE_PAYOUT -> stripePayoutGateway.resolvedConnectedAccountId()
+                ?: _payoutConfig.value.bankWire.accountNumberOrIban
+        },
         notes: String? = null,
         onSuccess: (TransactionEntity) -> Unit = {}
     ) {
@@ -1853,6 +1948,374 @@ class GlobalMarketViewModel(
             )
             onSuccess(entity)
         }
+    }
+
+    // ==========================================
+    // Live Stripe Payouts API Integration
+    // ==========================================
+
+    suspend fun syncStripeBalanceAndPayouts(): Boolean {
+        _stripePayoutState.value = _stripePayoutState.value.copy(
+            isKeyConfigured = stripePayoutGateway.isConfigured(),
+            isLiveMode = stripePayoutGateway.isLiveKey(),
+            environmentLabel = stripePayoutGateway.environmentLabel(),
+            maskedKeyPreview = stripePayoutGateway.maskedKeyHint(),
+            connectedAccountId = stripePayoutGateway.resolvedConnectedAccountId(),
+            isLoadingBalance = true,
+            errorMessage = null
+        )
+
+        val balanceRes = stripePayoutGateway.fetchBalance()
+        val payoutsRes = stripePayoutGateway.listPayouts(limit = 15)
+
+        val current = _stripePayoutState.value
+        if (balanceRes is StripePayoutApiResult.MissingApiKey) {
+            _stripePayoutState.value = current.copy(
+                isLoadingBalance = false,
+                errorMessage = balanceRes.message
+            )
+            return false
+        }
+
+        if (balanceRes is StripePayoutApiResult.ApiError) {
+            _stripePayoutState.value = current.copy(
+                isLoadingBalance = false,
+                errorMessage = balanceRes.message
+            )
+            return false
+        }
+
+        val balanceSummary = (balanceRes as StripePayoutApiResult.Success).data
+        val remotePayouts = when (payoutsRes) {
+            is StripePayoutApiResult.Success -> payoutsRes.data
+            else -> current.remotePayouts
+        }
+
+        // Sync fetched Stripe payouts into Room payout_wire_history
+        remotePayouts.forEach { remote ->
+            persistRemoteStripePayoutToRoom(remote)
+        }
+
+        _stripePayoutState.value = current.copy(
+            isLoadingBalance = false,
+            isLiveMode = balanceSummary.livemode || stripePayoutGateway.isLiveKey(),
+            availableBalances = balanceSummary.available,
+            pendingBalances = balanceSummary.pending,
+            remotePayouts = remotePayouts,
+            lastStripePayout = remotePayouts.firstOrNull() ?: current.lastStripePayout,
+            statusMessage = "Synced ${remotePayouts.size} Stripe payouts & live balance",
+            errorMessage = (payoutsRes as? StripePayoutApiResult.ApiError)?.message,
+            lastSyncedEpochMs = System.currentTimeMillis()
+        )
+        return payoutsRes is StripePayoutApiResult.Success
+    }
+
+    fun refreshStripeBalanceAndPayouts() {
+        viewModelScope.launch {
+            syncStripeBalanceAndPayouts()
+        }
+    }
+
+    suspend fun submitLiveStripePayout(
+        amountInUsd: Double,
+        currencyCode: String = _selectedCurrency.value.code,
+        speedMethod: String = _stripePayoutState.value.selectedSpeedMethod,
+        description: String? = null
+    ): StripePayoutApiResult<StripePayoutItem> {
+        val currency = currencies.find { it.code.equals(currencyCode, ignoreCase = true) } ?: _selectedCurrency.value
+        val fxRate = _liveRateMap.value[currency.code] ?: currency.exchangeRate
+        val targetMajorAmount = amountInUsd * fxRate
+
+        _stripePayoutState.value = _stripePayoutState.value.copy(
+            isSubmittingPayout = true,
+            errorMessage = null,
+            statusMessage = null
+        )
+
+        val result = stripePayoutGateway.createPayout(
+            majorAmount = targetMajorAmount,
+            currencyCode = currency.code,
+            speedMethod = speedMethod,
+            description = description ?: "GlobalMarket Pro Owner Payout (${currency.code})",
+            statementDescriptor = "GLOBALMARKET PRO",
+            idempotencyKey = "gm_po_${System.currentTimeMillis()}_${(100..999).random()}"
+        )
+
+        return when (result) {
+            is StripePayoutApiResult.Success -> {
+                val created = result.data
+                persistCreatedStripePayout(
+                    stripePayout = created,
+                    grossUsd = amountInUsd,
+                    fxRate = fxRate,
+                    country = currency.defaultCountry
+                )
+                val updatedRemote = listOf(created) + _stripePayoutState.value.remotePayouts.filterNot { it.id == created.id }
+                _stripePayoutState.value = _stripePayoutState.value.copy(
+                    isSubmittingPayout = false,
+                    remotePayouts = updatedRemote,
+                    lastStripePayout = created,
+                    statusMessage = "Stripe payout ${created.id} submitted (${created.status.uppercase()})",
+                    errorMessage = null,
+                    lastSyncedEpochMs = System.currentTimeMillis()
+                )
+                result
+            }
+            is StripePayoutApiResult.MissingApiKey -> {
+                _stripePayoutState.value = _stripePayoutState.value.copy(
+                    isSubmittingPayout = false,
+                    errorMessage = result.message
+                )
+                result
+            }
+            is StripePayoutApiResult.ApiError -> {
+                _stripePayoutState.value = _stripePayoutState.value.copy(
+                    isSubmittingPayout = false,
+                    errorMessage = result.message
+                )
+                result
+            }
+        }
+    }
+
+    fun executeLiveStripePayout(
+        amountInUsd: Double,
+        currencyCode: String = _selectedCurrency.value.code,
+        speedMethod: String = _stripePayoutState.value.selectedSpeedMethod,
+        description: String? = null,
+        onResult: (Boolean, String) -> Unit = { _, _ -> }
+    ) {
+        viewModelScope.launch {
+            when (val res = submitLiveStripePayout(amountInUsd, currencyCode, speedMethod, description)) {
+                is StripePayoutApiResult.Success -> {
+                    onResult(true, "Stripe payout ${res.data.id} (${res.data.status.uppercase()}) saved to Room ledger.")
+                }
+                is StripePayoutApiResult.MissingApiKey -> {
+                    onResult(false, res.message)
+                }
+                is StripePayoutApiResult.ApiError -> {
+                    onResult(false, res.message)
+                }
+            }
+        }
+    }
+
+    suspend fun cancelStripePayoutById(payoutId: String): StripePayoutApiResult<StripePayoutItem> {
+        _stripePayoutState.value = _stripePayoutState.value.copy(
+            isCancelingPayoutId = payoutId,
+            errorMessage = null
+        )
+        val result = stripePayoutGateway.cancelPayout(payoutId)
+        return when (result) {
+            is StripePayoutApiResult.Success -> {
+                val updated = result.data
+                val existing = repository.getPayoutWireByReference(payoutId).first()
+                if (existing != null) {
+                    repository.updatePayoutWire(
+                        existing.copy(status = StripePayoutGateway.mapStripeStatusToRoomStatus(updated.status))
+                    )
+                }
+                val updatedList = _stripePayoutState.value.remotePayouts.map {
+                    if (it.id == payoutId) updated else it
+                }
+                _stripePayoutState.value = _stripePayoutState.value.copy(
+                    isCancelingPayoutId = null,
+                    remotePayouts = updatedList,
+                    statusMessage = "Stripe payout $payoutId canceled",
+                    errorMessage = null
+                )
+                result
+            }
+            is StripePayoutApiResult.MissingApiKey -> {
+                _stripePayoutState.value = _stripePayoutState.value.copy(
+                    isCancelingPayoutId = null,
+                    errorMessage = result.message
+                )
+                result
+            }
+            is StripePayoutApiResult.ApiError -> {
+                _stripePayoutState.value = _stripePayoutState.value.copy(
+                    isCancelingPayoutId = null,
+                    errorMessage = result.message
+                )
+                result
+            }
+        }
+    }
+
+    fun cancelPendingStripePayout(
+        payoutId: String,
+        onResult: (Boolean, String) -> Unit = { _, _ -> }
+    ) {
+        viewModelScope.launch {
+            when (val res = cancelStripePayoutById(payoutId)) {
+                is StripePayoutApiResult.Success -> onResult(true, "Canceled Stripe payout ${res.data.id}")
+                is StripePayoutApiResult.MissingApiKey -> onResult(false, res.message)
+                is StripePayoutApiResult.ApiError -> onResult(false, res.message)
+            }
+        }
+    }
+
+    private suspend fun persistCreatedStripePayout(
+        stripePayout: StripePayoutItem,
+        grossUsd: Double,
+        fxRate: Double,
+        country: String
+    ) {
+        val feeUsd = if (stripePayout.method.equals("instant", ignoreCase = true)) {
+            (grossUsd * 0.01).coerceAtLeast(0.50)
+        } else {
+            0.0
+        }
+        val netUsd = (grossUsd - feeUsd).coerceAtLeast(0.0)
+        val recipient = _payoutConfig.value.bankWire.accountHolderName
+        val destination = stripePayout.destination
+            ?: stripePayoutGateway.resolvedConnectedAccountId()
+            ?: _payoutConfig.value.bankWire.accountNumberOrIban
+        val roomStatus = StripePayoutGateway.mapStripeStatusToRoomStatus(stripePayout.status)
+        val clearingRail = "Stripe ${stripePayout.method.uppercase()} (${stripePayout.payoutType})"
+
+        val txEntity = TransactionEntity(
+            amountInUsd = grossUsd,
+            targetCurrency = stripePayout.currencyCode,
+            convertedAmount = stripePayout.majorAmount,
+            customerName = "Stripe Payout: $recipient",
+            country = country,
+            timestamp = stripePayout.createdEpochMs.takeIf { it > 0L } ?: System.currentTimeMillis(),
+            stripeSubscriptionId = stripePayout.id
+        )
+
+        val logEntity = TransactionLogEntity(
+            logType = "PAYOUT",
+            title = "Stripe Live Payout (${stripePayout.method.uppercase()})",
+            barcodeOrRawValue = destination,
+            barcodeFormat = "STRIPE_PAYOUT",
+            amount = stripePayout.majorAmount,
+            currencyCode = stripePayout.currencyCode,
+            amountInUsd = grossUsd,
+            customerOrRecipient = recipient,
+            country = country,
+            paymentMethod = clearingRail,
+            status = roomStatus,
+            referenceCode = stripePayout.id,
+            notes = stripePayout.description ?: "Stripe live payout via API v1/payouts"
+        )
+
+        val salesEntity = SalesTransactionEntity(
+            transactionReference = stripePayout.id,
+            customerName = "Stripe Payout: $recipient",
+            subtotalAmount = stripePayout.majorAmount,
+            taxAmount = 0.0,
+            discountAmount = 0.0,
+            totalAmount = stripePayout.majorAmount,
+            currency = stripePayout.currencyCode,
+            amountInUsd = grossUsd,
+            exchangeRate = fxRate,
+            paymentMethod = clearingRail,
+            paymentStatus = roomStatus,
+            terminalId = "STRIPE-PAYOUT-API",
+            cashierName = "Stripe Live Gateway",
+            itemCount = 1,
+            itemsSummary = "Stripe ${stripePayout.method} payout (${stripePayout.id})",
+            receiptNumber = "REC-${stripePayout.id}",
+            notes = stripePayout.description
+        )
+
+        val wireEntity = PayoutWireEntity(
+            referenceCode = stripePayout.id,
+            transactionType = "PROCESSED_PAYOUT",
+            method = "STRIPE_PAYOUT",
+            grossAmountUsd = grossUsd,
+            feeUsd = feeUsd,
+            netAmountUsd = netUsd,
+            convertedAmount = stripePayout.majorAmount,
+            currencyCode = stripePayout.currencyCode,
+            exchangeRate = fxRate,
+            recipientName = recipient,
+            bankName = if (stripePayout.payoutType == "card") "Stripe Instant Debit Card" else "Stripe Connected Bank",
+            ibanOrAccount = destination,
+            swiftBic = "STRIPE",
+            routingNumber = stripePayoutGateway.resolvedConnectedAccountId().orEmpty(),
+            country = country,
+            clearingRail = clearingRail,
+            status = roomStatus,
+            isSimulatedWire = false,
+            timestamp = stripePayout.createdEpochMs.takeIf { it > 0L } ?: System.currentTimeMillis(),
+            notes = stripePayout.description ?: "Live Stripe Payout (${stripePayout.status})"
+        )
+
+        _lastDisbursedPayoutReference.value = stripePayout.id
+        repository.insert(txEntity)
+        repository.insertLog(logEntity)
+        repository.insertSalesTransaction(salesEntity)
+        repository.insertPayoutWire(wireEntity)
+
+        firestoreRepository?.let { firestoreRepo ->
+            try {
+                firestoreRepo.recordOwnerPayout(
+                    FirestoreOwnerPayoutRecord(
+                        userId = firestoreRepo.requireUserId(),
+                        payoutId = stripePayout.id,
+                        method = "STRIPE_PAYOUT",
+                        amount = stripePayout.majorAmount,
+                        fee = feeUsd,
+                        netAmount = netUsd,
+                        currency = stripePayout.currencyCode,
+                        recipientName = recipient,
+                        destinationSummary = destination,
+                        reference = stripePayout.id,
+                        status = roomStatus
+                    )
+                )
+            } catch (_: Exception) {}
+        }
+    }
+
+    private suspend fun persistRemoteStripePayoutToRoom(remote: StripePayoutItem) {
+        val roomStatus = StripePayoutGateway.mapStripeStatusToRoomStatus(remote.status)
+        val existing = repository.getPayoutWireByReference(remote.id).first()
+        if (existing != null) {
+            if (existing.status != roomStatus) {
+                repository.updatePayoutWire(existing.copy(status = roomStatus))
+            }
+            return
+        }
+
+        val fxRate = _liveRateMap.value[remote.currencyCode]
+            ?: currencies.find { it.code.equals(remote.currencyCode, ignoreCase = true) }?.exchangeRate
+            ?: 1.0
+        val grossUsd = if (fxRate > 0.0) remote.majorAmount / fxRate else remote.majorAmount
+        val feeUsd = if (remote.method.equals("instant", ignoreCase = true)) {
+            (grossUsd * 0.01).coerceAtLeast(0.50)
+        } else {
+            0.0
+        }
+        val netUsd = (grossUsd - feeUsd).coerceAtLeast(0.0)
+
+        repository.insertPayoutWire(
+            PayoutWireEntity(
+                referenceCode = remote.id,
+                transactionType = "PROCESSED_PAYOUT",
+                method = "STRIPE_PAYOUT",
+                grossAmountUsd = grossUsd,
+                feeUsd = feeUsd,
+                netAmountUsd = netUsd,
+                convertedAmount = remote.majorAmount,
+                currencyCode = remote.currencyCode,
+                exchangeRate = fxRate,
+                recipientName = _payoutConfig.value.bankWire.accountHolderName,
+                bankName = if (remote.payoutType == "card") "Stripe Instant Debit Card" else "Stripe Connected Bank",
+                ibanOrAccount = remote.destination ?: _payoutConfig.value.bankWire.accountNumberOrIban,
+                swiftBic = "STRIPE",
+                routingNumber = stripePayoutGateway.resolvedConnectedAccountId().orEmpty(),
+                country = _payoutConfig.value.bankWire.country,
+                clearingRail = "Stripe ${remote.method.uppercase()} (${remote.payoutType})",
+                status = roomStatus,
+                isSimulatedWire = false,
+                timestamp = remote.createdEpochMs.takeIf { it > 0L } ?: System.currentTimeMillis(),
+                notes = remote.description ?: "Synced from Stripe API (${remote.status})"
+            )
+        )
     }
 
     suspend fun saveSimulatedBankWire(

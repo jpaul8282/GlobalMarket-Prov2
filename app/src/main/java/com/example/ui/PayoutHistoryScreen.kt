@@ -113,6 +113,7 @@ private enum class PayoutHistoryFilter(val key: String, val label: String) {
     ALL("ALL", "All"),
     PROCESSED("PROCESSED", "Processed Payouts"),
     SIMULATED("SIMULATED", "Simulated Wires"),
+    STRIPE("STRIPE", "Stripe"),
     BANK_WIRE("BANK_WIRE", "Bank / iDEAL"),
     PAYPAL("PAYPAL", "PayPal")
 }
@@ -185,7 +186,8 @@ fun PayoutHistoryScreen(
                     PayoutHistoryFilter.ALL -> true
                     PayoutHistoryFilter.PROCESSED -> !record.isSimulatedWire && record.transactionType == "PROCESSED_PAYOUT"
                     PayoutHistoryFilter.SIMULATED -> record.isSimulatedWire || record.transactionType == "SIMULATED_BANK_WIRE"
-                    PayoutHistoryFilter.BANK_WIRE -> record.method != "PAYPAL"
+                    PayoutHistoryFilter.STRIPE -> record.method.equals("STRIPE_PAYOUT", ignoreCase = true)
+                    PayoutHistoryFilter.BANK_WIRE -> record.method != "PAYPAL" && !record.method.equals("STRIPE_PAYOUT", ignoreCase = true)
                     PayoutHistoryFilter.PAYPAL -> record.method.equals("PAYPAL", ignoreCase = true)
                 }
                 val q = searchQuery.trim()
@@ -440,7 +442,8 @@ fun PayoutHistoryScreen(
                             PayoutHistoryFilter.ALL -> allPayoutWires.size
                             PayoutHistoryFilter.PROCESSED -> summaryProcessedCount
                             PayoutHistoryFilter.SIMULATED -> summarySimulatedCount
-                            PayoutHistoryFilter.BANK_WIRE -> allPayoutWires.count { it.method != "PAYPAL" }
+                            PayoutHistoryFilter.STRIPE -> allPayoutWires.count { it.method.equals("STRIPE_PAYOUT", ignoreCase = true) }
+                            PayoutHistoryFilter.BANK_WIRE -> allPayoutWires.count { it.method != "PAYPAL" && !it.method.equals("STRIPE_PAYOUT", ignoreCase = true) }
                             PayoutHistoryFilter.PAYPAL -> allPayoutWires.count { it.method.equals("PAYPAL", ignoreCase = true) }
                         }
 
@@ -848,7 +851,8 @@ private fun PayoutHistoryItemCard(
     val dateString = remember(record.timestamp) {
         SimpleDateFormat("MMM dd, yyyy • HH:mm", Locale.getDefault()).format(Date(record.timestamp))
     }
-    val isBankOrIdeal = record.method != "PAYPAL"
+    val isStripe = record.method.equals("STRIPE_PAYOUT", ignoreCase = true)
+    val isBankOrIdeal = record.method != "PAYPAL" && !isStripe
 
     Card(
         modifier = Modifier
@@ -860,7 +864,11 @@ private fun PayoutHistoryItemCard(
         colors = CardDefaults.cardColors(containerColor = CleanSurface),
         border = BorderStroke(
             1.dp,
-            if (record.isSimulatedWire) CleanOrange.copy(alpha = 0.45f) else CleanBorder
+            when {
+                record.isSimulatedWire -> CleanOrange.copy(alpha = 0.45f)
+                isStripe -> CleanSecondary.copy(alpha = 0.55f)
+                else -> CleanBorder
+            }
         )
     ) {
         Column(

@@ -64,6 +64,7 @@ fun OwnerPayoutSectionView(
     val transactions by viewModel.transactions.collectAsStateWithLifecycle()
     val transactionLogs by viewModel.transactionLogs.collectAsStateWithLifecycle()
     val payoutWireHistory by viewModel.payoutWireHistory.collectAsStateWithLifecycle()
+    val stripePayoutState by viewModel.stripePayoutState.collectAsStateWithLifecycle()
     val selectedCurrency by viewModel.selectedCurrency.collectAsStateWithLifecycle()
     val currencyFormatter = remember { CurrencyFormatter.DEFAULT }
 
@@ -704,6 +705,36 @@ fun OwnerPayoutSectionView(
             )
         }
 
+        // 3B. LIVE STRIPE PAYOUTS API CONSOLE (v1/balance, v1/payouts)
+        item {
+            StripeLivePayoutCard(
+                stripeState = stripePayoutState,
+                amountInUsd = parsedAmount,
+                currencyCode = selectedPayoutCurrency.code,
+                currencyFormatter = currencyFormatter,
+                onSelectSpeed = { speed -> viewModel.setStripePayoutSpeed(speed) },
+                onSyncStripe = { viewModel.refreshStripeBalanceAndPayouts() },
+                onExecuteStripePayout = {
+                    viewModel.executeLiveStripePayout(
+                        amountInUsd = parsedAmount,
+                        currencyCode = selectedPayoutCurrency.code,
+                        speedMethod = stripePayoutState.selectedSpeedMethod,
+                        onResult = { ok, msg ->
+                            if (ok) {
+                                lastSuccessRef = viewModel.lastDisbursedPayoutReference.value
+                            }
+                            Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                        }
+                    )
+                },
+                onCancelStripePayout = { payoutId ->
+                    viewModel.cancelPendingStripePayout(payoutId) { _, msg ->
+                        Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                    }
+                }
+            )
+        }
+
         // 3. SUCCESS BANNER (IF DISBURSED)
         if (lastSuccessRef != null) {
             item {
@@ -806,10 +837,10 @@ fun OwnerPayoutSectionView(
                         }
                     }
 
-                    // A. Payout Method Selector (Bank Wire vs PayPal)
+                    // A. Payout Method Selector (Bank Wire vs PayPal vs Stripe Live)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         // Bank Wire Pill
                         val isWire = activeMethod == PayoutMethodType.BANK_WIRE
@@ -826,7 +857,7 @@ fun OwnerPayoutSectionView(
                                 .testTag("owner_payout_select_wire")
                         ) {
                             Column(
-                                modifier = Modifier.padding(14.dp),
+                                modifier = Modifier.padding(12.dp),
                                 verticalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
                                 Row(
@@ -838,27 +869,29 @@ fun OwnerPayoutSectionView(
                                         imageVector = Icons.Default.AccountBalance,
                                         contentDescription = null,
                                         tint = if (isWire) CleanPrimary else CleanTextSecondary,
-                                        modifier = Modifier.size(20.dp)
+                                        modifier = Modifier.size(18.dp)
                                     )
                                     if (isWire) {
                                         Icon(
                                             imageVector = Icons.Default.CheckCircle,
                                             contentDescription = "Selected",
                                             tint = CleanPrimary,
-                                            modifier = Modifier.size(16.dp)
+                                            modifier = Modifier.size(15.dp)
                                         )
                                     }
                                 }
                                 Text(
                                     text = "Bank Wire",
-                                    fontSize = 13.sp,
+                                    fontSize = 12.sp,
                                     fontWeight = FontWeight.Bold,
-                                    color = if (isWire) CleanOnPrimaryContainer else CleanTextPrimary
+                                    color = if (isWire) CleanOnPrimaryContainer else CleanTextPrimary,
+                                    maxLines = 1
                                 )
                                 Text(
-                                    text = "SWIFT / IBAN / ACH",
-                                    fontSize = 10.sp,
-                                    color = if (isWire) CleanPrimary else CleanTextSecondary
+                                    text = "SWIFT / IBAN",
+                                    fontSize = 9.sp,
+                                    color = if (isWire) CleanPrimary else CleanTextSecondary,
+                                    maxLines = 1
                                 )
                             }
                         }
@@ -878,7 +911,7 @@ fun OwnerPayoutSectionView(
                                 .testTag("owner_payout_select_paypal")
                         ) {
                             Column(
-                                modifier = Modifier.padding(14.dp),
+                                modifier = Modifier.padding(12.dp),
                                 verticalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
                                 Row(
@@ -890,27 +923,83 @@ fun OwnerPayoutSectionView(
                                         imageVector = Icons.Default.Payments,
                                         contentDescription = null,
                                         tint = if (isPayPal) CleanPrimary else CleanTextSecondary,
-                                        modifier = Modifier.size(20.dp)
+                                        modifier = Modifier.size(18.dp)
                                     )
                                     if (isPayPal) {
                                         Icon(
                                             imageVector = Icons.Default.CheckCircle,
                                             contentDescription = "Selected",
                                             tint = CleanPrimary,
-                                            modifier = Modifier.size(16.dp)
+                                            modifier = Modifier.size(15.dp)
                                         )
                                     }
                                 }
                                 Text(
-                                    text = "PayPal Wallet",
-                                    fontSize = 13.sp,
+                                    text = "PayPal",
+                                    fontSize = 12.sp,
                                     fontWeight = FontWeight.Bold,
-                                    color = if (isPayPal) CleanOnPrimaryContainer else CleanTextPrimary
+                                    color = if (isPayPal) CleanOnPrimaryContainer else CleanTextPrimary,
+                                    maxLines = 1
                                 )
                                 Text(
-                                    text = "Instant Digital Wallet",
-                                    fontSize = 10.sp,
-                                    color = if (isPayPal) CleanPrimary else CleanTextSecondary
+                                    text = "Digital Wallet",
+                                    fontSize = 9.sp,
+                                    color = if (isPayPal) CleanPrimary else CleanTextSecondary,
+                                    maxLines = 1
+                                )
+                            }
+                        }
+
+                        // Stripe Live Payout Pill
+                        val isStripe = activeMethod == PayoutMethodType.STRIPE_PAYOUT
+                        Surface(
+                            onClick = {
+                                activeMethod = PayoutMethodType.STRIPE_PAYOUT
+                                viewModel.selectPayoutMethod(PayoutMethodType.STRIPE_PAYOUT)
+                            },
+                            shape = RoundedCornerShape(16.dp),
+                            color = if (isStripe) CleanSecondaryContainer else CleanSurfaceVariant,
+                            border = BorderStroke(1.5.dp, if (isStripe) CleanSecondary else CleanBorderSubtle),
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("owner_payout_select_stripe")
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Bolt,
+                                        contentDescription = null,
+                                        tint = if (isStripe) CleanSecondary else CleanTextSecondary,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    if (isStripe) {
+                                        Icon(
+                                            imageVector = Icons.Default.CheckCircle,
+                                            contentDescription = "Selected",
+                                            tint = CleanSecondary,
+                                            modifier = Modifier.size(15.dp)
+                                        )
+                                    }
+                                }
+                                Text(
+                                    text = "Stripe Live",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (isStripe) CleanSecondary else CleanTextPrimary,
+                                    maxLines = 1
+                                )
+                                Text(
+                                    text = "v1/payouts API",
+                                    fontSize = 9.sp,
+                                    color = if (isStripe) CleanSecondary else CleanTextSecondary,
+                                    maxLines = 1
                                 )
                             }
                         }
@@ -938,28 +1027,32 @@ fun OwnerPayoutSectionView(
                                 contentAlignment = Alignment.Center
                             ) {
                                 Icon(
-                                    imageVector = if (activeMethod == PayoutMethodType.BANK_WIRE) Icons.Default.AccountBalance else Icons.Default.Payments,
+                                    imageVector = when (activeMethod) {
+                                        PayoutMethodType.BANK_WIRE -> Icons.Default.AccountBalance
+                                        PayoutMethodType.PAYPAL -> Icons.Default.Payments
+                                        PayoutMethodType.STRIPE_PAYOUT -> Icons.Default.Bolt
+                                    },
                                     contentDescription = null,
-                                    tint = CleanPrimary,
+                                    tint = if (activeMethod == PayoutMethodType.STRIPE_PAYOUT) CleanSecondary else CleanPrimary,
                                     modifier = Modifier.size(20.dp)
                                 )
                             }
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = if (activeMethod == PayoutMethodType.BANK_WIRE) {
-                                        "${payoutConfig.bankWire.bankName} • ${payoutConfig.bankWire.accountHolderName}"
-                                    } else {
-                                        "PayPal • ${payoutConfig.payPal.paypalEmailOrId}"
+                                    text = when (activeMethod) {
+                                        PayoutMethodType.BANK_WIRE -> "${payoutConfig.bankWire.bankName} • ${payoutConfig.bankWire.accountHolderName}"
+                                        PayoutMethodType.PAYPAL -> "PayPal • ${payoutConfig.payPal.paypalEmailOrId}"
+                                        PayoutMethodType.STRIPE_PAYOUT -> "Stripe Live (${stripePayoutState.environmentLabel})"
                                     },
                                     fontSize = 13.sp,
                                     fontWeight = FontWeight.SemiBold,
                                     color = CleanTextPrimary
                                 )
                                 Text(
-                                    text = if (activeMethod == PayoutMethodType.BANK_WIRE) {
-                                        "IBAN: ${payoutConfig.bankWire.accountNumberOrIban} • BIC: ${payoutConfig.bankWire.swiftBic}"
-                                    } else {
-                                        "Recipient: ${payoutConfig.payPal.recipientName} • ${payoutConfig.payPal.phoneOrPaypalMe}"
+                                    text = when (activeMethod) {
+                                        PayoutMethodType.BANK_WIRE -> "IBAN: ${payoutConfig.bankWire.accountNumberOrIban} • BIC: ${payoutConfig.bankWire.swiftBic}"
+                                        PayoutMethodType.PAYPAL -> "Recipient: ${payoutConfig.payPal.recipientName} • ${payoutConfig.payPal.phoneOrPaypalMe}"
+                                        PayoutMethodType.STRIPE_PAYOUT -> "Rail: ${stripePayoutState.selectedSpeedMethod.uppercase()} • Key: ${stripePayoutState.maskedKeyPreview}"
                                     },
                                     fontSize = 11.sp,
                                     color = CleanTextSecondary
@@ -1099,7 +1192,11 @@ fun OwnerPayoutSectionView(
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
                                 Text(
-                                    text = if (activeMethod == PayoutMethodType.BANK_WIRE) "Interbank Wire Fee:" else "PayPal Processing Fee:",
+                                    text = when (activeMethod) {
+                                        PayoutMethodType.BANK_WIRE -> "Interbank Wire Fee:"
+                                        PayoutMethodType.PAYPAL -> "PayPal Processing Fee:"
+                                        PayoutMethodType.STRIPE_PAYOUT -> "Stripe Payout Fee (${stripePayoutState.selectedSpeedMethod.uppercase()}):"
+                                    },
                                     fontSize = 12.sp,
                                     color = CleanTextSecondary
                                 )
@@ -1145,6 +1242,22 @@ fun OwnerPayoutSectionView(
                                 Toast.makeText(context, "Please enter a valid payout amount", Toast.LENGTH_SHORT).show()
                                 return@Button
                             }
+                            if (activeMethod == PayoutMethodType.STRIPE_PAYOUT) {
+                                isDisbursing = true
+                                viewModel.executeLiveStripePayout(
+                                    amountInUsd = parsedAmount,
+                                    currencyCode = selectedPayoutCurrency.code,
+                                    speedMethod = stripePayoutState.selectedSpeedMethod,
+                                    onResult = { ok, msg ->
+                                        isDisbursing = false
+                                        if (ok) {
+                                            lastSuccessRef = viewModel.lastDisbursedPayoutReference.value ?: "PO-STRIPE"
+                                        }
+                                        Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                                    }
+                                )
+                                return@Button
+                            }
                             isDisbursing = true
                             scope.launch {
                                 delay(600) // Quick smooth UI transition
@@ -1163,7 +1276,7 @@ fun OwnerPayoutSectionView(
                                     recipientName = recipient,
                                     destinationIdentifier = destination,
                                     notes = notes,
-                                    onSuccess = { created ->
+                                    onSuccess = { _ ->
                                         lastSuccessRef = viewModel.lastDisbursedPayoutReference.value ?: "PO-SETTLED"
                                         isDisbursing = false
                                         Toast.makeText(context, "${activeMethod.displayName} of $${String.format(Locale.US, "%.2f", parsedAmount)} settled!", Toast.LENGTH_SHORT).show()
@@ -1177,7 +1290,9 @@ fun OwnerPayoutSectionView(
                             .height(52.dp)
                             .testTag("owner_disburse_action_button"),
                         shape = RoundedCornerShape(16.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = CleanPrimary)
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (activeMethod == PayoutMethodType.STRIPE_PAYOUT) CleanSecondary else CleanPrimary
+                        )
                     ) {
                         if (isDisbursing) {
                             CircularProgressIndicator(
@@ -1186,10 +1301,18 @@ fun OwnerPayoutSectionView(
                                 strokeWidth = 2.dp
                             )
                             Spacer(modifier = Modifier.width(10.dp))
-                            Text(text = "Settling Payout...", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                            Text(
+                                text = if (activeMethod == PayoutMethodType.STRIPE_PAYOUT) "Calling Stripe Payout API..." else "Settling Payout...",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 14.sp
+                            )
                         } else {
                             Icon(
-                                imageVector = if (activeMethod == PayoutMethodType.BANK_WIRE) Icons.Default.AccountBalance else Icons.Default.Payments,
+                                imageVector = when (activeMethod) {
+                                    PayoutMethodType.BANK_WIRE -> Icons.Default.AccountBalance
+                                    PayoutMethodType.PAYPAL -> Icons.Default.Payments
+                                    PayoutMethodType.STRIPE_PAYOUT -> Icons.Default.Bolt
+                                },
                                 contentDescription = null,
                                 modifier = Modifier.size(18.dp)
                             )
