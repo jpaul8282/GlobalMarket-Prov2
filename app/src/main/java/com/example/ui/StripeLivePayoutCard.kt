@@ -3,7 +3,7 @@ package com.example.ui
 import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,17 +15,21 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountBalance
 import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.CloudSync
-import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.CreditCard
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -51,6 +55,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.StripeConnectionHealth
+import com.example.data.StripePayoutGateway
 import com.example.data.StripePayoutItem
 import com.example.ui.theme.CleanBorder
 import com.example.ui.theme.CleanBorderSubtle
@@ -89,7 +95,9 @@ fun StripeLivePayoutCard(
     onSyncStripe: () -> Unit,
     onExecuteStripePayout: () -> Unit,
     onCancelStripePayout: (String) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onVerifyConnection: () -> Unit = onSyncStripe,
+    onSelectDestination: (String?) -> Unit = {}
 ) {
     val context = LocalContext.current
 
@@ -101,7 +109,12 @@ fun StripeLivePayoutCard(
         colors = CardDefaults.cardColors(containerColor = CleanSurface),
         border = BorderStroke(
             1.5.dp,
-            if (stripeState.isKeyConfigured) CleanSecondary.copy(alpha = 0.55f) else CleanBorder
+            when (stripeState.connectionHealth) {
+                StripeConnectionHealth.CONNECTED,
+                StripeConnectionHealth.RESTRICTED_CONNECTED -> CleanSuccess.copy(alpha = 0.55f)
+                StripeConnectionHealth.ERROR -> CleanDanger.copy(alpha = 0.55f)
+                else -> if (stripeState.isKeyConfigured) CleanSecondary.copy(alpha = 0.55f) else CleanBorder
+            }
         ),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
@@ -138,14 +151,22 @@ fun StripeLivePayoutCard(
                     }
                     Column {
                         Text(
-                            text = "Stripe Payouts Live API",
+                            text = "Stripe Payouts Connection",
                             fontSize = 15.sp,
                             fontWeight = FontWeight.Bold,
                             color = CleanTextPrimary
                         )
                         Text(
-                            text = "api.stripe.com/v1/payouts • Key: ${stripeState.maskedKeyPreview}",
-                            fontSize = 11.sp,
+                            text = "Public: ${stripeState.maskedPublishableKeyPreview}",
+                            fontSize = 10.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = CleanTextSecondary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = "Secret: ${stripeState.maskedKeyPreview} • v${StripePayoutGateway.STRIPE_API_VERSION}",
+                            fontSize = 10.sp,
                             fontFamily = FontFamily.Monospace,
                             color = CleanTextSecondary,
                             maxLines = 1,
@@ -187,30 +208,140 @@ fun StripeLivePayoutCard(
                 }
             }
 
-            // Optional Connect account info
-            if (!stripeState.connectedAccountId.isNullOrBlank()) {
-                Surface(
-                    shape = RoundedCornerShape(10.dp),
-                    color = CleanSurfaceVariant,
-                    border = BorderStroke(1.dp, CleanBorderSubtle),
-                    modifier = Modifier.fillMaxWidth()
+            // 1B. Live Connection Health & Account Diagnostics Strip
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = CleanSurfaceSecondary,
+                border = BorderStroke(1.dp, CleanBorderSubtle),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("stripe_connection_diagnostics_strip")
+            ) {
+                Column(
+                    modifier = Modifier.padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            val healthColor = when (stripeState.connectionHealth) {
+                                StripeConnectionHealth.CONNECTED,
+                                StripeConnectionHealth.RESTRICTED_CONNECTED -> CleanSuccess
+                                StripeConnectionHealth.ERROR -> CleanDanger
+                                StripeConnectionHealth.CHECKING -> CleanSecondary
+                                else -> CleanOrange
+                            }
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .clip(CircleShape)
+                                    .background(healthColor)
+                            )
+                            Text(
+                                text = stripeState.connectionHealth.label,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = healthColor,
+                                modifier = Modifier
+                                    .testTag("stripe_connection_health_label")
+                                    .semantics(mergeDescendants = true) {}
+                            )
+                            if (stripeState.lastLatencyMs != null) {
+                                Text(
+                                    text = "• ${stripeState.lastLatencyMs}ms",
+                                    fontSize = 10.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = CleanTextSecondary
+                                )
+                            }
+                        }
+
+                        TextButton(
+                            onClick = onVerifyConnection,
+                            enabled = !stripeState.isCheckingConnection && !stripeState.isLoadingBalance,
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                            modifier = Modifier.testTag("stripe_verify_connection_button")
+                        ) {
+                            Icon(
+                                imageVector = if (stripeState.connectionHealth == StripeConnectionHealth.CONNECTED) {
+                                    Icons.Default.CloudDone
+                                } else {
+                                    Icons.Default.VerifiedUser
+                                },
+                                contentDescription = "Verify Stripe Connection",
+                                tint = CleanPrimary,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = if (stripeState.isCheckingConnection) "Verifying..." else "Verify Connection",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = CleanPrimary
+                            )
+                        }
+                    }
+
+                    // Connected Account Metadata (from v1/account or Connect header)
+                    if (!stripeState.accountId.isNullOrBlank() || !stripeState.connectedAccountId.isNullOrBlank()) {
+                        HorizontalDivider(color = CleanBorderSubtle)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = stripeState.accountBusinessName ?: "Connected Stripe Account",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = CleanTextPrimary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                val acctRef = stripeState.accountId ?: stripeState.connectedAccountId.orEmpty()
+                                val regionInfo = listOfNotNull(
+                                    acctRef,
+                                    stripeState.accountCountry,
+                                    stripeState.accountDefaultCurrency
+                                ).joinToString(" • ")
+                                Text(
+                                    text = regionInfo,
+                                    fontSize = 10.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = CleanTextSecondary
+                                )
+                            }
+
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = if (stripeState.payoutsEnabled) CleanSuccessContainer else CleanOrangeContainer
+                            ) {
+                                Text(
+                                    text = if (stripeState.payoutsEnabled) "PAYOUTS ENABLED" else "VERIFYING CAPABILITY",
+                                    fontSize = 8.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = if (stripeState.payoutsEnabled) CleanSuccess else CleanOrangeText,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    if (!stripeState.lastRequestId.isNullOrBlank()) {
                         Text(
-                            text = "Stripe-Account Header",
-                            fontSize = 11.sp,
-                            color = CleanTextMuted
-                        )
-                        Text(
-                            text = stripeState.connectedAccountId,
-                            fontSize = 11.sp,
+                            text = "Last Request-Id: ${stripeState.lastRequestId}",
+                            fontSize = 9.sp,
                             fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.Bold,
-                            color = CleanPrimary
+                            color = CleanTextMuted,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                 }
@@ -239,13 +370,21 @@ fun StripeLivePayoutCard(
                         )
                         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                             Text(
-                                text = "Configure STRIPE_SECRET_KEY in AI Studio Secrets",
+                                text = if (stripeState.isPublishableKeyMistakenForSecret) {
+                                    "Publishable Key Detected in STRIPE_SECRET_KEY"
+                                } else {
+                                    "Configure Stripe Keys in AI Studio Secrets"
+                                },
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = CleanTextPrimary
                             )
                             Text(
-                                text = "Add your Stripe test or live secret key (sk_test_... / sk_live_...) in the Secrets panel to query live Stripe balances and execute real payouts.",
+                                text = if (stripeState.isPublishableKeyMistakenForSecret) {
+                                    "A Stripe Publishable Key (pk_...) belongs in STRIPE_PUBLISHABLE_KEY. Put your Stripe Secret Key (sk_live_... or sk_test_...) in STRIPE_SECRET_KEY in the Secrets panel."
+                                } else {
+                                    "Set STRIPE_PUBLISHABLE_KEY (pk_...) and STRIPE_SECRET_KEY (sk_live_... / sk_test_...) in the Secrets panel to verify your account and execute live payouts."
+                                },
                                 fontSize = 11.sp,
                                 color = CleanTextSecondary,
                                 lineHeight = 15.sp
@@ -271,7 +410,7 @@ fun StripeLivePayoutCard(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column {
+                        Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 text = "LIVE STRIPE TREASURY BALANCE",
                                 fontSize = 10.sp,
@@ -285,7 +424,7 @@ fun StripeLivePayoutCard(
                                 text = if (primaryAvail != null) {
                                     "Available: ${currencyFormatter.format(primaryAvail.majorAmount, primaryAvail.currencyCode)}"
                                 } else if (stripeState.isKeyConfigured) {
-                                    "Tap Sync to load live Stripe balance"
+                                    "Tap Sync API to load live Stripe balance"
                                 } else {
                                     "Awaiting Stripe API key"
                                 },
@@ -310,7 +449,7 @@ fun StripeLivePayoutCard(
                             border = BorderStroke(1.dp, CleanSecondary),
                             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
                             modifier = Modifier
-                                .height(40.dp)
+                                .height(42.dp)
                                 .testTag("stripe_sync_button")
                         ) {
                             if (stripeState.isLoadingBalance) {
@@ -337,11 +476,12 @@ fun StripeLivePayoutCard(
                         }
                     }
 
-                    // Multi-currency balances pills if Stripe returned multiple currencies
                     if (stripeState.availableBalances.size > 1) {
                         Row(
                             horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState())
                         ) {
                             stripeState.availableBalances.take(4).forEach { bal ->
                                 Surface(
@@ -356,6 +496,91 @@ fun StripeLivePayoutCard(
                                         color = CleanTextPrimary,
                                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                                     )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 2B. External Bank / Card Payout Destinations (if discovered from v1/account)
+            if (stripeState.externalAccounts.isNotEmpty()) {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        text = "STRIPE EXTERNAL PAYOUT DESTINATION",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = CleanTextMuted,
+                        letterSpacing = 0.7.sp
+                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        val isAutoSelected = stripeState.selectedDestinationId == null
+                        Surface(
+                            onClick = { onSelectDestination(null) },
+                            shape = RoundedCornerShape(12.dp),
+                            color = if (isAutoSelected) CleanPrimaryContainer else CleanSurfaceVariant,
+                            border = BorderStroke(1.dp, if (isAutoSelected) CleanPrimary else CleanBorderSubtle),
+                            modifier = Modifier
+                                .height(46.dp)
+                                .testTag("stripe_dest_auto")
+                        ) {
+                            Box(
+                                modifier = Modifier.padding(horizontal = 12.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "Auto Default",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (isAutoSelected) CleanPrimary else CleanTextSecondary
+                                )
+                            }
+                        }
+
+                        stripeState.externalAccounts.forEach { ext ->
+                            val isSelected = stripeState.selectedDestinationId == ext.id
+                            Surface(
+                                onClick = { onSelectDestination(ext.id) },
+                                shape = RoundedCornerShape(12.dp),
+                                color = if (isSelected) CleanSecondaryContainer else CleanSurfaceVariant,
+                                border = BorderStroke(1.dp, if (isSelected) CleanSecondary else CleanBorderSubtle),
+                                modifier = Modifier
+                                    .height(46.dp)
+                                    .testTag("stripe_dest_${ext.id}")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = if (ext.type.equals("card", ignoreCase = true)) {
+                                            Icons.Default.CreditCard
+                                        } else {
+                                            Icons.Default.AccountBalance
+                                        },
+                                        contentDescription = null,
+                                        tint = if (isSelected) CleanSecondary else CleanTextSecondary,
+                                        modifier = Modifier.size(15.dp)
+                                    )
+                                    Column {
+                                        Text(
+                                            text = "${ext.label} ••••${ext.last4}",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (isSelected) CleanSecondary else CleanTextPrimary
+                                        )
+                                        Text(
+                                            text = "${ext.currencyCode}${if (ext.isDefaultForCurrency) " • Default" else ""}",
+                                            fontSize = 9.sp,
+                                            color = CleanTextSecondary
+                                        )
+                                    }
                                 }
                             }
                         }

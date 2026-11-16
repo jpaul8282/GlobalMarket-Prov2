@@ -123,6 +123,15 @@ fun OwnerPayoutSectionView(
 
     val listState = rememberLazyListState()
     val parsedAmount = payoutAmountInput.toDoubleOrNull() ?: 0.0
+
+    LaunchedEffect(stripePayoutState.isKeyConfigured) {
+        if (stripePayoutState.isKeyConfigured &&
+            stripePayoutState.lastSyncedEpochMs == null &&
+            !stripePayoutState.isLoadingBalance
+        ) {
+            viewModel.triggerVerifyStripeConnection()
+        }
+    }
     val calculatedFee = viewModel.calculatePayoutFee(activeMethod, parsedAmount)
     val netDisbursement = (parsedAmount - calculatedFee).coerceAtLeast(0.0)
 
@@ -1065,6 +1074,8 @@ fun OwnerPayoutSectionView(
                 currencyFormatter = currencyFormatter,
                 onSelectSpeed = { speed -> viewModel.setStripePayoutSpeed(speed) },
                 onSyncStripe = { viewModel.refreshStripeBalanceAndPayouts() },
+                onVerifyConnection = { viewModel.triggerVerifyStripeConnection() },
+                onSelectDestination = { destId -> viewModel.selectStripeDestination(destId) },
                 onExecuteStripePayout = {
                     viewModel.executeLiveStripePayout(
                         amountInUsd = parsedAmount,

@@ -90,18 +90,34 @@ enum class PayoutMethodType(val id: String, val displayName: String, val subtitl
 
 data class StripePayoutUiState(
     val isKeyConfigured: Boolean = false,
+    val isPublishableKeyConfigured: Boolean = false,
+    val isPublishableKeyMistakenForSecret: Boolean = false,
     val isLiveMode: Boolean = false,
     val environmentLabel: String = "API KEY REQUIRED",
+    val connectionHealth: StripeConnectionHealth = StripeConnectionHealth.KEY_REQUIRED,
     val maskedKeyPreview: String = "Not configured in Secrets",
+    val maskedPublishableKeyPreview: String = "Not configured in Secrets",
     val connectedAccountId: String? = null,
+    val accountId: String? = null,
+    val accountBusinessName: String? = null,
+    val accountCountry: String? = null,
+    val accountDefaultCurrency: String? = null,
+    val payoutsEnabled: Boolean = false,
+    val chargesEnabled: Boolean = false,
+    val isRestrictedKey: Boolean = false,
+    val externalAccounts: List<StripeExternalAccount> = emptyList(),
+    val selectedDestinationId: String? = null,
     val selectedSpeedMethod: String = "standard", // "standard" or "instant"
     val isLoadingBalance: Boolean = false,
+    val isCheckingConnection: Boolean = false,
     val isSubmittingPayout: Boolean = false,
     val isCancelingPayoutId: String? = null,
     val availableBalances: List<StripeCurrencyBalance> = emptyList(),
     val pendingBalances: List<StripeCurrencyBalance> = emptyList(),
     val remotePayouts: List<StripePayoutItem> = emptyList(),
     val lastStripePayout: StripePayoutItem? = null,
+    val lastLatencyMs: Long? = null,
+    val lastRequestId: String? = null,
     val statusMessage: String? = null,
     val errorMessage: String? = null,
     val lastSyncedEpochMs: Long? = null
@@ -1657,10 +1673,21 @@ class GlobalMarketViewModel(
     private val _stripePayoutState = MutableStateFlow(
         StripePayoutUiState(
             isKeyConfigured = stripePayoutGateway.isConfigured(),
+            isPublishableKeyConfigured = stripePayoutGateway.isPublishableKeyConfigured(),
+            isPublishableKeyMistakenForSecret = stripePayoutGateway.isPublishableKeyMistakenForSecret(),
             isLiveMode = stripePayoutGateway.isLiveKey(),
             environmentLabel = stripePayoutGateway.environmentLabel(),
+            connectionHealth = if (stripePayoutGateway.isConfigured()) {
+                StripeConnectionHealth.DISCONNECTED
+            } else if (stripePayoutGateway.isPublishableKeyMistakenForSecret()) {
+                StripeConnectionHealth.ERROR
+            } else {
+                StripeConnectionHealth.KEY_REQUIRED
+            },
             maskedKeyPreview = stripePayoutGateway.maskedKeyHint(),
-            connectedAccountId = stripePayoutGateway.resolvedConnectedAccountId()
+            maskedPublishableKeyPreview = stripePayoutGateway.maskedPublishableKeyHint(),
+            connectedAccountId = stripePayoutGateway.resolvedConnectedAccountId(),
+            isRestrictedKey = stripePayoutGateway.isRestrictedKey()
         )
     )
     val stripePayoutState: StateFlow<StripePayoutUiState> = _stripePayoutState.asStateFlow()
@@ -1740,6 +1767,12 @@ class GlobalMarketViewModel(
     fun setStripePayoutSpeed(speedMethod: String) {
         val normalized = if (speedMethod.equals("instant", ignoreCase = true)) "instant" else "standard"
         _stripePayoutState.value = _stripePayoutState.value.copy(selectedSpeedMethod = normalized)
+    }
+
+    fun selectStripeDestination(destinationId: String?) {
+        _stripePayoutState.value = _stripePayoutState.value.copy(
+            selectedDestinationId = destinationId?.takeIf { it.isNotBlank() }
+        )
     }
 
     fun calculatePayoutFee(method: PayoutMethodType, amountInUsd: Double): Double {
@@ -1954,65 +1987,115 @@ class GlobalMarketViewModel(
     // Live Stripe Payouts API Integration
     // ==========================================
 
-    suspend fun syncStripeBalanceAndPayouts(): Boolean {
+    suspend fun verifyStripeConnection(): Boolean {
+        val keyConfigured = stripePayoutGateway.isConfigured()
         _stripePayoutState.value = _stripePayoutState.value.copy(
-            isKeyConfigured = stripePayoutGateway.isConfigured(),
+            isKeyConfigured = keyConfigured,
+            isPublishableKeyConfigured = stripePayoutGateway.isPublishableKeyConfigured(),
+            isPublishableKeyMistakenForSecret = stripePayoutGateway.isPublishableKeyMistakenForSecret(),
             isLiveMode = stripePayoutGateway.isLiveKey(),
             environmentLabel = stripePayoutGateway.environmentLabel(),
+            connectionHealth = if (keyConfigured) {
+                StripeConnectionHealth.CHECKING
+            } else if (stripePayoutGateway.isPublishableKeyMistakenForSecret()) {
+                StripeConnectionHealth.ERROR
+            } else {
+                StripeConnectionHealth.KEY_REQUIRED
+            },
             maskedKeyPreview = stripePayoutGateway.maskedKeyHint(),
+            maskedPublishableKeyPreview = stripePayoutGateway.maskedPublishableKeyHint(),
             connectedAccountId = stripePayoutGateway.resolvedConnectedAccountId(),
+            isCheckingConnection = true,
             isLoadingBalance = true,
             errorMessage = null
         )
 
-        val balanceRes = stripePayoutGateway.fetchBalance()
-        val payoutsRes = stripePayoutGateway.listPayouts(limit = 15)
+        return when (val result = stripePayoutGateway.verifyConnection(limit = 15)) {
+            is StripePayoutApiResult.MissingApiKey -> {
+                _stripePayoutState.value = _stripePayoutState.value.copy(
+                    connectionHealth = StripeConnectionHealth.KEY_REQUIRED,
+                    isCheckingConnection = false,
+                    isLoadingBalance = false,
+                    errorMessage = result.message
+                )
+                false
+            }
+            is StripePayoutApiResult.ApiError -> {
+                _stripePayoutState.value = _stripePayoutState.value.copy(
+                    connectionHealth = StripeConnectionHealth.ERROR,
+                    isCheckingConnection = false,
+                    isLoadingBalance = false,
+                    lastRequestId = StripePayoutClient.lastRequestId,
+                    errorMessage = result.message
+                )
+                false
+            }
+            is StripePayoutApiResult.Success -> {
+                val verification = result.data
+                verification.recentPayouts.forEach { remote ->
+                    persistRemoteStripePayoutToRoom(remote)
+                }
+                val acct = verification.accountInfo
+                val externals = acct?.externalAccounts.orEmpty()
+                val currentSelectedDest = _stripePayoutState.value.selectedDestinationId
+                val resolvedDest = if (currentSelectedDest != null && externals.any { it.id == currentSelectedDest }) {
+                    currentSelectedDest
+                } else {
+                    externals.firstOrNull { it.isDefaultForCurrency }?.id ?: externals.firstOrNull()?.id
+                }
+                val resolvedHealth = if (verification.isRestrictedKey && acct == null) {
+                    StripeConnectionHealth.RESTRICTED_CONNECTED
+                } else {
+                    StripeConnectionHealth.CONNECTED
+                }
+                val summaryMsg = if (acct != null) {
+                    "Connected to ${acct.businessName} (${acct.accountId}) • ${verification.latencyMs}ms"
+                } else {
+                    "Stripe API connected (${verification.recentPayouts.size} payouts, ${verification.latencyMs}ms)"
+                }
 
-        val current = _stripePayoutState.value
-        if (balanceRes is StripePayoutApiResult.MissingApiKey) {
-            _stripePayoutState.value = current.copy(
-                isLoadingBalance = false,
-                errorMessage = balanceRes.message
-            )
-            return false
+                _stripePayoutState.value = _stripePayoutState.value.copy(
+                    connectionHealth = resolvedHealth,
+                    isCheckingConnection = false,
+                    isLoadingBalance = false,
+                    isLiveMode = verification.balanceSummary.livemode || stripePayoutGateway.isLiveKey(),
+                    accountId = acct?.accountId ?: _stripePayoutState.value.accountId,
+                    accountBusinessName = acct?.businessName ?: _stripePayoutState.value.accountBusinessName,
+                    accountCountry = acct?.country ?: _stripePayoutState.value.accountCountry,
+                    accountDefaultCurrency = acct?.defaultCurrency ?: _stripePayoutState.value.accountDefaultCurrency,
+                    payoutsEnabled = acct?.payoutsEnabled ?: true,
+                    chargesEnabled = acct?.chargesEnabled ?: true,
+                    isRestrictedKey = verification.isRestrictedKey,
+                    externalAccounts = externals,
+                    selectedDestinationId = resolvedDest,
+                    availableBalances = verification.balanceSummary.available,
+                    pendingBalances = verification.balanceSummary.pending,
+                    remotePayouts = verification.recentPayouts.ifEmpty { _stripePayoutState.value.remotePayouts },
+                    lastStripePayout = verification.recentPayouts.firstOrNull() ?: _stripePayoutState.value.lastStripePayout,
+                    lastLatencyMs = verification.latencyMs,
+                    lastRequestId = verification.requestId,
+                    statusMessage = summaryMsg,
+                    errorMessage = null,
+                    lastSyncedEpochMs = System.currentTimeMillis()
+                )
+                true
+            }
         }
+    }
 
-        if (balanceRes is StripePayoutApiResult.ApiError) {
-            _stripePayoutState.value = current.copy(
-                isLoadingBalance = false,
-                errorMessage = balanceRes.message
-            )
-            return false
+    fun triggerVerifyStripeConnection() {
+        viewModelScope.launch {
+            verifyStripeConnection()
         }
+    }
 
-        val balanceSummary = (balanceRes as StripePayoutApiResult.Success).data
-        val remotePayouts = when (payoutsRes) {
-            is StripePayoutApiResult.Success -> payoutsRes.data
-            else -> current.remotePayouts
-        }
-
-        // Sync fetched Stripe payouts into Room payout_wire_history
-        remotePayouts.forEach { remote ->
-            persistRemoteStripePayoutToRoom(remote)
-        }
-
-        _stripePayoutState.value = current.copy(
-            isLoadingBalance = false,
-            isLiveMode = balanceSummary.livemode || stripePayoutGateway.isLiveKey(),
-            availableBalances = balanceSummary.available,
-            pendingBalances = balanceSummary.pending,
-            remotePayouts = remotePayouts,
-            lastStripePayout = remotePayouts.firstOrNull() ?: current.lastStripePayout,
-            statusMessage = "Synced ${remotePayouts.size} Stripe payouts & live balance",
-            errorMessage = (payoutsRes as? StripePayoutApiResult.ApiError)?.message,
-            lastSyncedEpochMs = System.currentTimeMillis()
-        )
-        return payoutsRes is StripePayoutApiResult.Success
+    suspend fun syncStripeBalanceAndPayouts(): Boolean {
+        return verifyStripeConnection()
     }
 
     fun refreshStripeBalanceAndPayouts() {
         viewModelScope.launch {
-            syncStripeBalanceAndPayouts()
+            verifyStripeConnection()
         }
     }
 
@@ -2020,11 +2103,13 @@ class GlobalMarketViewModel(
         amountInUsd: Double,
         currencyCode: String = _selectedCurrency.value.code,
         speedMethod: String = _stripePayoutState.value.selectedSpeedMethod,
+        destinationId: String? = _stripePayoutState.value.selectedDestinationId,
         description: String? = null
     ): StripePayoutApiResult<StripePayoutItem> {
         val currency = currencies.find { it.code.equals(currencyCode, ignoreCase = true) } ?: _selectedCurrency.value
         val fxRate = _liveRateMap.value[currency.code] ?: currency.exchangeRate
         val targetMajorAmount = amountInUsd * fxRate
+        val startedAtMs = System.currentTimeMillis()
 
         _stripePayoutState.value = _stripePayoutState.value.copy(
             isSubmittingPayout = true,
@@ -2036,10 +2121,12 @@ class GlobalMarketViewModel(
             majorAmount = targetMajorAmount,
             currencyCode = currency.code,
             speedMethod = speedMethod,
+            destinationId = destinationId,
             description = description ?: "GlobalMarket Pro Owner Payout (${currency.code})",
             statementDescriptor = "GLOBALMARKET PRO",
             idempotencyKey = "gm_po_${System.currentTimeMillis()}_${(100..999).random()}"
         )
+        val latencyMs = (System.currentTimeMillis() - startedAtMs).coerceAtLeast(1L)
 
         return when (result) {
             is StripePayoutApiResult.Success -> {
@@ -2052,9 +2139,12 @@ class GlobalMarketViewModel(
                 )
                 val updatedRemote = listOf(created) + _stripePayoutState.value.remotePayouts.filterNot { it.id == created.id }
                 _stripePayoutState.value = _stripePayoutState.value.copy(
+                    connectionHealth = StripeConnectionHealth.CONNECTED,
                     isSubmittingPayout = false,
                     remotePayouts = updatedRemote,
                     lastStripePayout = created,
+                    lastLatencyMs = latencyMs,
+                    lastRequestId = StripePayoutClient.lastRequestId,
                     statusMessage = "Stripe payout ${created.id} submitted (${created.status.uppercase()})",
                     errorMessage = null,
                     lastSyncedEpochMs = System.currentTimeMillis()
@@ -2086,7 +2176,7 @@ class GlobalMarketViewModel(
         onResult: (Boolean, String) -> Unit = { _, _ -> }
     ) {
         viewModelScope.launch {
-            when (val res = submitLiveStripePayout(amountInUsd, currencyCode, speedMethod, description)) {
+            when (val res = submitLiveStripePayout(amountInUsd, currencyCode, speedMethod, description = description)) {
                 is StripePayoutApiResult.Success -> {
                     onResult(true, "Stripe payout ${res.data.id} (${res.data.status.uppercase()}) saved to Room ledger.")
                 }
