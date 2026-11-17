@@ -81,6 +81,7 @@ import com.example.ui.QrPaymentDialog
 import com.example.ui.RealTimeCurrencyConversionTool
 import com.example.ui.RealTimeCurrencyConverterModal
 import com.example.ui.SecurityThreatDefenseModal
+import com.example.ui.StripeDashboardScreen
 import com.example.ui.TransactionSummaryScreen
 import com.example.ui.UserProfile
 import com.example.ui.theme.*
@@ -174,6 +175,7 @@ class MainActivity : ComponentActivity() {
                         val isPayoutModalOpen by viewModel.isPayoutModalOpen.collectAsStateWithLifecycle()
                         val isOwnerPayoutScreenOpen by viewModel.isOwnerPayoutScreenOpen.collectAsStateWithLifecycle()
                         val isPayoutHistoryScreenOpen by viewModel.isPayoutHistoryScreenOpen.collectAsStateWithLifecycle()
+                        val isStripeUiOpen by viewModel.isStripeUiOpen.collectAsStateWithLifecycle()
                         val isCurrencyConverterModalOpen by viewModel.isCurrencyConverterModalOpen.collectAsStateWithLifecycle()
                         val isSecurityDefenseModalOpen by viewModel.isSecurityDefenseModalOpen.collectAsStateWithLifecycle()
                         val deepLinkBanner by viewModel.deepLinkBanner.collectAsStateWithLifecycle()
@@ -349,6 +351,21 @@ class MainActivity : ComponentActivity() {
                             PayoutHistoryScreen(
                                 viewModel = viewModel,
                                 onBack = { viewModel.closePayoutHistoryScreen() },
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+                    }
+
+                    if (isStripeUiOpen) {
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(MaterialTheme.colorScheme.background),
+                            color = MaterialTheme.colorScheme.background
+                        ) {
+                            StripeDashboardScreen(
+                                viewModel = viewModel,
+                                onBack = { viewModel.closeStripeUi() },
                                 modifier = Modifier.fillMaxSize()
                             )
                         }
@@ -765,6 +782,100 @@ fun GlobalMarketDashboard(
                             fontSize = 11.sp,
                             color = CleanOnPrimaryContainer.copy(alpha = 0.65f)
                         )
+                    }
+                }
+            }
+        }
+
+        // 2B. STRIPE CONNECT & TREASURY QUICK ENTRY CARD
+        item {
+            val stripeUiState by viewModel.stripePayoutState.collectAsStateWithLifecycle()
+            val primaryAvail = stripeUiState.availableBalances.firstOrNull()
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("dashboard_stripe_card"),
+                shape = RoundedCornerShape(22.dp),
+                colors = CardDefaults.cardColors(containerColor = CleanSurface),
+                border = BorderStroke(1.5.dp, StripeIndigo.copy(alpha = 0.35f))
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(42.dp)
+                                .clip(CircleShape)
+                                .background(StripeIndigoContainer),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Bolt,
+                                contentDescription = "Stripe UI",
+                                tint = StripeIndigo,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(
+                                    text = "Stripe Treasury & Payouts",
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = CleanTextPrimary
+                                )
+                                Surface(
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = StripeIndigoContainer
+                                ) {
+                                    Text(
+                                        text = stripeUiState.environmentLabel,
+                                        fontSize = 8.sp,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        color = StripeIndigo,
+                                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
+                            Text(
+                                text = if (primaryAvail != null) {
+                                    "Available: ${com.example.util.CurrencyFormatter.DEFAULT.format(primaryAvail.majorAmount, primaryAvail.currencyCode)} • ${stripeUiState.connectionHealth.label}"
+                                } else {
+                                    "${stripeUiState.connectionHealth.label} • Tap to manage live payouts"
+                                },
+                                fontSize = 11.sp,
+                                color = CleanTextSecondary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+
+                    Button(
+                        onClick = { viewModel.openStripeUi() },
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = StripeIndigo,
+                            contentColor = StripeOnIndigo
+                        ),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                        modifier = Modifier
+                            .height(42.dp)
+                            .testTag("dashboard_open_stripe_ui_button")
+                    ) {
+                        Text("Stripe UI", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -2560,6 +2671,23 @@ fun EnhancedAccountSettingsView(
                             Icon(imageVector = Icons.Default.AccountBalance, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(text = "Open Owner Payout Section", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        }
+
+                        Button(
+                            onClick = { viewModel.openStripeUi() },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(46.dp)
+                                .testTag("settings_open_stripe_ui_button"),
+                            shape = RoundedCornerShape(14.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = StripeIndigo,
+                                contentColor = StripeOnIndigo
+                            )
+                        ) {
+                            Icon(imageVector = Icons.Default.Bolt, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(text = "Open Stripe Connect & Payouts UI", fontWeight = FontWeight.Bold, fontSize = 13.sp)
                         }
 
                         OutlinedButton(

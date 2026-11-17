@@ -87,6 +87,7 @@ fun OwnerPayoutSectionView(
     var historyFilter by remember { mutableStateOf("ALL") }
     val filteredPayoutWires = remember(payoutWireHistory, historyFilter) {
         when (historyFilter) {
+            "STRIPE" -> payoutWireHistory.filter { it.method.equals("STRIPE_PAYOUT", ignoreCase = true) }
             "PAYOUTS" -> payoutWireHistory.filter { !it.isSimulatedWire && it.transactionType == "PROCESSED_PAYOUT" }
             "SIM_WIRES" -> payoutWireHistory.filter { it.isSimulatedWire || it.transactionType == "SIMULATED_BANK_WIRE" }
             "IDEAL" -> payoutWireHistory.filter {
@@ -123,6 +124,25 @@ fun OwnerPayoutSectionView(
 
     val listState = rememberLazyListState()
     val parsedAmount = payoutAmountInput.toDoubleOrNull() ?: 0.0
+
+    LaunchedEffect(payoutConfig.selectedMethod) {
+        activeMethod = payoutConfig.selectedMethod
+    }
+
+    val scrollToSectionKey: (String) -> Unit = { targetKey ->
+        scope.launch {
+            val targetIdx = listState.layoutInfo.totalItemsCount.let {
+                // Find by matching item keys if visible, or use stable layout ordering
+                when (targetKey) {
+                    "stripe_section" -> 5
+                    "disburse_section" -> if (lastSuccessRef != null) 7 else 6
+                    "trends_section" -> if (lastSuccessRef != null) 8 else 7
+                    else -> 0
+                }
+            }
+            listState.animateScrollToItem(targetIdx)
+        }
+    }
 
     LaunchedEffect(stripePayoutState.isKeyConfigured) {
         if (stripePayoutState.isKeyConfigured &&
@@ -251,6 +271,24 @@ fun OwnerPayoutSectionView(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        IconButton(
+                            onClick = { viewModel.openStripeUi() },
+                            modifier = Modifier
+                                .minimumInteractiveComponentSize()
+                                .size(44.dp)
+                                .clip(CircleShape)
+                                .background(StripeIndigoContainer)
+                                .border(BorderStroke(1.dp, StripeIndigo.copy(alpha = 0.45f)), CircleShape)
+                                .testTag("owner_open_stripe_ui_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Bolt,
+                                contentDescription = "Open Full Stripe UI",
+                                tint = StripeIndigo,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+
                         IconButton(
                             onClick = { viewModel.openPayoutHistoryScreen() },
                             modifier = Modifier
@@ -421,6 +459,71 @@ fun OwnerPayoutSectionView(
                         }
                     }
 
+                    // Stripe Live Integration Status Strip inside Vault
+                    val primaryStripeAvail = stripePayoutState.availableBalances.firstOrNull()
+                    Surface(
+                        onClick = {
+                            activeMethod = PayoutMethodType.STRIPE_PAYOUT
+                            viewModel.selectPayoutMethod(PayoutMethodType.STRIPE_PAYOUT)
+                            viewModel.refreshStripeBalanceAndPayouts()
+                            scrollToSectionKey("stripe_section")
+                        },
+                        shape = RoundedCornerShape(14.dp),
+                        color = Color.White.copy(alpha = 0.14f),
+                        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.28f)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("vault_stripe_status_pill")
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 9.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Bolt,
+                                    contentDescription = "Stripe Live Status",
+                                    tint = CleanOnPrimary,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Column {
+                                    Text(
+                                        text = "Stripe Live • ${stripePayoutState.connectionHealth.label}",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = CleanOnPrimary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        text = if (primaryStripeAvail != null) {
+                                            "Stripe Available: ${currencyFormatter.format(primaryStripeAvail.majorAmount, primaryStripeAvail.currencyCode)}"
+                                        } else {
+                                            "${stripePayoutState.environmentLabel} • Tap to sync & pay out"
+                                        },
+                                        fontSize = 10.sp,
+                                        color = CleanOnPrimary.copy(alpha = 0.85f),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                                contentDescription = "Open Stripe Section",
+                                tint = CleanOnPrimary,
+                                modifier = Modifier.size(15.dp)
+                            )
+                        }
+                    }
+
                     // Vault Action Buttons
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -431,8 +534,7 @@ fun OwnerPayoutSectionView(
                                 if (availablePayoutBalanceUsd > 0.0) {
                                     payoutAmountInput = String.format(Locale.US, "%.2f", availablePayoutBalanceUsd)
                                 }
-                                val disburseIndex = if (lastSuccessRef != null) 7 else 6
-                                scope.launch { listState.animateScrollToItem(disburseIndex) }
+                                scrollToSectionKey("disburse_section")
                             },
                             modifier = Modifier
                                 .weight(1f)
@@ -625,7 +727,7 @@ fun OwnerPayoutSectionView(
                         OutlinedButton(
                             onClick = {
                                 viewModel.refreshStripeBalanceAndPayouts()
-                                scope.launch { listState.animateScrollToItem(5) }
+                                scrollToSectionKey("stripe_section")
                             },
                             enabled = !stripePayoutState.isLoadingBalance,
                             modifier = Modifier
@@ -686,8 +788,7 @@ fun OwnerPayoutSectionView(
                             FilledTonalButton(
                                 onClick = {
                                     if (payoutWireHistory.isNotEmpty()) {
-                                        val chartIdx = if (lastSuccessRef != null) 8 else 7
-                                        scope.launch { listState.animateScrollToItem(chartIdx) }
+                                        scrollToSectionKey("trends_section")
                                     } else {
                                         viewModel.openPayoutHistoryScreen()
                                     }
@@ -715,6 +816,24 @@ fun OwnerPayoutSectionView(
                                 Icon(imageVector = Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(15.dp))
                                 Spacer(modifier = Modifier.width(5.dp))
                                 Text("Edit Accounts", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                        item {
+                            FilledTonalButton(
+                                onClick = { viewModel.openStripeUi() },
+                                modifier = Modifier
+                                    .height(48.dp)
+                                    .testTag("payout_hub_btn_stripe_ui"),
+                                shape = RoundedCornerShape(12.dp),
+                                colors = ButtonDefaults.filledTonalButtonColors(
+                                    containerColor = StripeIndigoContainer,
+                                    contentColor = StripeIndigo
+                                ),
+                                contentPadding = PaddingValues(horizontal = 12.dp)
+                            ) {
+                                Icon(imageVector = Icons.Default.Bolt, contentDescription = null, modifier = Modifier.size(15.dp))
+                                Spacer(modifier = Modifier.width(5.dp))
+                                Text("Stripe UI", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                             }
                         }
                         item {
@@ -1423,7 +1542,8 @@ fun OwnerPayoutSectionView(
                                     text = when (activeMethod) {
                                         PayoutMethodType.BANK_WIRE -> "${payoutConfig.bankWire.bankName} • ${payoutConfig.bankWire.accountHolderName}"
                                         PayoutMethodType.PAYPAL -> "PayPal • ${payoutConfig.payPal.paypalEmailOrId}"
-                                        PayoutMethodType.STRIPE_PAYOUT -> "Stripe Live (${stripePayoutState.environmentLabel})"
+                                        PayoutMethodType.STRIPE_PAYOUT -> stripePayoutState.accountBusinessName
+                                            ?: "Stripe Live (${stripePayoutState.environmentLabel})"
                                     },
                                     fontSize = 13.sp,
                                     fontWeight = FontWeight.SemiBold,
@@ -1433,11 +1553,97 @@ fun OwnerPayoutSectionView(
                                     text = when (activeMethod) {
                                         PayoutMethodType.BANK_WIRE -> "IBAN: ${payoutConfig.bankWire.accountNumberOrIban} • BIC: ${payoutConfig.bankWire.swiftBic}"
                                         PayoutMethodType.PAYPAL -> "Recipient: ${payoutConfig.payPal.recipientName} • ${payoutConfig.payPal.phoneOrPaypalMe}"
-                                        PayoutMethodType.STRIPE_PAYOUT -> "Rail: ${stripePayoutState.selectedSpeedMethod.uppercase()} • Key: ${stripePayoutState.maskedKeyPreview}"
+                                        PayoutMethodType.STRIPE_PAYOUT -> "Health: ${stripePayoutState.connectionHealth.label} • Rail: ${stripePayoutState.selectedSpeedMethod.uppercase()} • ${stripePayoutState.maskedKeyPreview}"
                                     },
                                     fontSize = 11.sp,
                                     color = CleanTextSecondary
                                 )
+                            }
+                            if (activeMethod == PayoutMethodType.STRIPE_PAYOUT) {
+                                TextButton(
+                                    onClick = { viewModel.triggerVerifyStripeConnection() },
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                    modifier = Modifier.testTag("disburse_card_verify_stripe_btn")
+                                ) {
+                                    Text(
+                                        text = if (stripePayoutState.isCheckingConnection) "..." else "Verify",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = CleanSecondary
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // Inline Stripe Live Speed & Destination Controls when Stripe Live is active
+                    AnimatedVisibility(visible = activeMethod == PayoutMethodType.STRIPE_PAYOUT) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("disburse_card_stripe_inline_controls"),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                val isStd = stripePayoutState.selectedSpeedMethod == "standard"
+                                OutlinedButton(
+                                    onClick = { viewModel.setStripePayoutSpeed("standard") },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(42.dp)
+                                        .testTag("disburse_stripe_speed_standard"),
+                                    shape = RoundedCornerShape(12.dp),
+                                    colors = ButtonDefaults.outlinedButtonColors(
+                                        containerColor = if (isStd) CleanSecondaryContainer else Color.Transparent,
+                                        contentColor = if (isStd) CleanSecondary else CleanTextSecondary
+                                    ),
+                                    border = BorderStroke(1.dp, if (isStd) CleanSecondary else CleanBorderSubtle)
+                                ) {
+                                    Text("Standard ($0 Fee)", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
+
+                                val isInst = stripePayoutState.selectedSpeedMethod == "instant"
+                                OutlinedButton(
+                                    onClick = { viewModel.setStripePayoutSpeed("instant") },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(42.dp)
+                                        .testTag("disburse_stripe_speed_instant"),
+                                    shape = RoundedCornerShape(12.dp),
+                                    colors = ButtonDefaults.outlinedButtonColors(
+                                        containerColor = if (isInst) CleanOrangeContainer else Color.Transparent,
+                                        contentColor = if (isInst) CleanOrangeText else CleanTextSecondary
+                                    ),
+                                    border = BorderStroke(1.dp, if (isInst) CleanOrange else CleanBorderSubtle)
+                                ) {
+                                    Text("Instant (1% Fee)", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+
+                            if (stripePayoutState.externalAccounts.isNotEmpty()) {
+                                LazyRow(
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    items(stripePayoutState.externalAccounts, key = { it.id }) { ext ->
+                                        val isDestSelected = stripePayoutState.selectedDestinationId == ext.id
+                                        FilterChip(
+                                            selected = isDestSelected,
+                                            onClick = { viewModel.selectStripeDestination(ext.id) },
+                                            label = {
+                                                Text(
+                                                    text = "${ext.label} ••••${ext.last4} (${ext.currencyCode})",
+                                                    fontSize = 10.sp,
+                                                    fontWeight = FontWeight.SemiBold
+                                                )
+                                            },
+                                            modifier = Modifier.testTag("disburse_stripe_dest_${ext.id}")
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
@@ -1843,17 +2049,21 @@ fun OwnerPayoutSectionView(
                     }
                 }
 
-                // Filter Chips for Payouts vs Simulated Wires vs iDEAL
-                Row(
+                // Filter Chips for Payouts vs Stripe vs Simulated Wires vs iDEAL
+                LazyRow(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    listOf(
-                        "ALL" to "All (${payoutWireHistory.size})",
-                        "PAYOUTS" to "Payouts",
-                        "SIM_WIRES" to "Sim Wires",
-                        "IDEAL" to "iDEAL / SEPA"
-                    ).forEach { (key, label) ->
+                    items(
+                        listOf(
+                            "ALL" to "All (${payoutWireHistory.size})",
+                            "STRIPE" to "Stripe",
+                            "PAYOUTS" to "Payouts",
+                            "SIM_WIRES" to "Sim Wires",
+                            "IDEAL" to "iDEAL / SEPA"
+                        ),
+                        key = { it.first }
+                    ) { (key, label) ->
                         val isSelected = historyFilter == key
                         Surface(
                             onClick = { historyFilter = key },
@@ -2008,7 +2218,8 @@ fun PayoutWireHistoryCard(
     val dateString = remember(record.timestamp) {
         SimpleDateFormat("MMM dd, yyyy • HH:mm", Locale.getDefault()).format(Date(record.timestamp))
     }
-    val isBankOrIdeal = record.method != "PAYPAL"
+    val isStripe = record.method.equals("STRIPE_PAYOUT", ignoreCase = true)
+    val isBankOrIdeal = record.method != "PAYPAL" && !isStripe
 
     Card(
         modifier = Modifier
@@ -2020,7 +2231,11 @@ fun PayoutWireHistoryCard(
         colors = CardDefaults.cardColors(containerColor = CleanSurface),
         border = BorderStroke(
             1.dp,
-            if (record.isSimulatedWire) CleanOrange.copy(alpha = 0.45f) else CleanBorder
+            when {
+                record.isSimulatedWire -> CleanOrange.copy(alpha = 0.45f)
+                isStripe -> CleanSecondary.copy(alpha = 0.45f)
+                else -> CleanBorder
+            }
         )
     ) {
         Column(
@@ -2044,18 +2259,28 @@ fun PayoutWireHistoryCard(
                             .size(42.dp)
                             .clip(CircleShape)
                             .background(
-                                if (record.isSimulatedWire) CleanOrangeContainer
-                                else if (isBankOrIdeal) CleanPrimaryContainer
-                                else CleanSecondaryContainer
+                                when {
+                                    record.isSimulatedWire -> CleanOrangeContainer
+                                    isStripe -> CleanSecondaryContainer
+                                    isBankOrIdeal -> CleanPrimaryContainer
+                                    else -> CleanSecondaryContainer
+                                }
                             ),
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
-                            imageVector = if (isBankOrIdeal) Icons.Default.AccountBalance else Icons.Default.Payments,
+                            imageVector = when {
+                                isStripe -> Icons.Default.Bolt
+                                isBankOrIdeal -> Icons.Default.AccountBalance
+                                else -> Icons.Default.Payments
+                            },
                             contentDescription = null,
-                            tint = if (record.isSimulatedWire) CleanOrange
-                            else if (isBankOrIdeal) CleanPrimary
-                            else CleanSecondary,
+                            tint = when {
+                                record.isSimulatedWire -> CleanOrange
+                                isStripe -> CleanSecondary
+                                isBankOrIdeal -> CleanPrimary
+                                else -> CleanSecondary
+                            },
                             modifier = Modifier.size(20.dp)
                         )
                     }
@@ -2075,13 +2300,25 @@ fun PayoutWireHistoryCard(
                             )
                             Surface(
                                 shape = RoundedCornerShape(6.dp),
-                                color = if (record.isSimulatedWire) CleanOrangeContainer else CleanPrimaryContainer
+                                color = when {
+                                    record.isSimulatedWire -> CleanOrangeContainer
+                                    isStripe -> CleanSecondaryContainer
+                                    else -> CleanPrimaryContainer
+                                }
                             ) {
                                 Text(
-                                    text = if (record.isSimulatedWire) "SIM WIRE" else "PAYOUT",
+                                    text = when {
+                                        record.isSimulatedWire -> "SIM WIRE"
+                                        isStripe -> "STRIPE"
+                                        else -> "PAYOUT"
+                                    },
                                     fontSize = 8.sp,
                                     fontWeight = FontWeight.ExtraBold,
-                                    color = if (record.isSimulatedWire) CleanOrangeText else CleanPrimary,
+                                    color = when {
+                                        record.isSimulatedWire -> CleanOrangeText
+                                        isStripe -> CleanSecondary
+                                        else -> CleanPrimary
+                                    },
                                     modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
                                 )
                             }
@@ -2100,7 +2337,11 @@ fun PayoutWireHistoryCard(
                         text = currencyFormatter.formatUsd(record.netAmountUsd),
                         fontSize = 15.sp,
                         fontWeight = FontWeight.ExtraBold,
-                        color = if (record.isSimulatedWire) CleanOrange else CleanPrimary
+                        color = when {
+                            record.isSimulatedWire -> CleanOrange
+                            isStripe -> CleanSecondary
+                            else -> CleanPrimary
+                        }
                     )
                     Text(
                         text = "≈ ${currencyFormatter.format(record.convertedAmount, record.currencyCode)}",

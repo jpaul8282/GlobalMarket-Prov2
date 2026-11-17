@@ -3,10 +3,13 @@ package com.example
 import android.content.Context
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextContains
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToNode
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.example.data.AppDatabase
@@ -25,6 +28,7 @@ import com.example.data.StripePayoutGateway
 import com.example.data.StripePayoutListResponseDto
 import com.example.data.TransactionRepository
 import com.example.ui.GlobalMarketViewModel
+import com.example.ui.StripeDashboardScreen
 import com.example.ui.StripeLivePayoutCard
 import com.example.ui.StripePayoutUiState
 import com.example.ui.theme.MyApplicationTheme
@@ -432,5 +436,117 @@ class StripeLivePayoutTest {
         composeTestRule.onNodeWithText("GlobalMarket Pro B.V.").assertIsDisplayed()
         composeTestRule.onNodeWithTag("stripe_dest_ba_1N8vING001").performClick()
         assertEquals("ba_1N8vING001", selectedDest)
+    }
+
+    @Test
+    fun `stripeDashboardScreen displays hero treasury, credentials diagnostics, and back callback`() {
+        val viewModel = GlobalMarketViewModel(
+            repository = repository,
+            stripePayoutGateway = StripePayoutGateway(
+                publishableKeyProvider = { "MY_STRIPE_PUBLISHABLE_KEY" },
+                secretKeyProvider = { "MY_STRIPE_SECRET_KEY" }
+            )
+        )
+        var backClicked = false
+
+        composeTestRule.setContent {
+            MyApplicationTheme {
+                StripeDashboardScreen(
+                    viewModel = viewModel,
+                    onBack = { backClicked = true }
+                )
+            }
+        }
+
+        composeTestRule.onNodeWithTag("stripe_dashboard_screen").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("stripe_ui_hero_card").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("stripe_ui_env_badge").assertTextContains("API KEY REQUIRED")
+
+        composeTestRule.onNodeWithTag("stripe_dashboard_screen")
+            .performScrollToNode(hasTestTag("stripe_ui_missing_key_callout"))
+        composeTestRule.onNodeWithTag("stripe_ui_missing_key_callout").assertIsDisplayed()
+
+        composeTestRule.onNodeWithTag("stripe_dashboard_screen")
+            .performScrollToNode(hasTestTag("stripe_ui_back_button"))
+        composeTestRule.onNodeWithTag("stripe_ui_back_button").performClick()
+        assertTrue(backClicked)
+    }
+
+    @Test
+    fun `stripeDashboardScreen executes live payout and displays remote feed`() {
+        val fakeApi = FakeStripePayoutApiService()
+        val gateway = StripePayoutGateway(
+            apiProvider = { fakeApi },
+            publishableKeyProvider = { "pk_test_51PublishableUiTest9999" },
+            secretKeyProvider = { "sk_test_51SecretUiTest9999" },
+            connectedAccountProvider = { "acct_1UiTestAccount" },
+            lastRequestIdProvider = { "req_ui_01" }
+        )
+        val viewModel = GlobalMarketViewModel(
+            repository = repository,
+            stripePayoutGateway = gateway
+        )
+
+        composeTestRule.setContent {
+            MyApplicationTheme {
+                StripeDashboardScreen(
+                    viewModel = viewModel,
+                    onBack = {}
+                )
+            }
+        }
+
+        try {
+            composeTestRule.waitUntil(timeoutMillis = 10000) {
+                org.robolectric.shadows.ShadowLooper.idleMainLooper()
+                viewModel.stripePayoutState.value.remotePayouts.isNotEmpty()
+            }
+        } catch (t: Throwable) {
+            throw AssertionError("Timed out waiting for remotePayouts. Current stripePayoutState=${viewModel.stripePayoutState.value}", t)
+        }
+
+        composeTestRule.onNodeWithTag("stripe_ui_sync_button")
+            .assertIsDisplayed()
+            .performClick()
+        try {
+            composeTestRule.waitUntil(timeoutMillis = 10000) {
+                org.robolectric.shadows.ShadowLooper.idleMainLooper()
+                !viewModel.stripePayoutState.value.isCheckingConnection &&
+                    viewModel.stripePayoutState.value.remotePayouts.isNotEmpty()
+            }
+        } catch (t: Throwable) {
+            throw AssertionError("Timed out after sync click. Current stripePayoutState=${viewModel.stripePayoutState.value}", t)
+        }
+
+        composeTestRule.onNodeWithTag("stripe_dashboard_screen")
+            .performScrollToNode(hasTestTag("stripe_ui_credentials_card"))
+        composeTestRule.onNodeWithTag("stripe_ui_credentials_card").assertIsDisplayed()
+
+        composeTestRule.onNodeWithTag("stripe_dashboard_screen")
+            .performScrollToNode(hasTestTag("stripe_ui_speed_instant"))
+        composeTestRule.onNodeWithTag("stripe_ui_speed_instant").performClick()
+        composeTestRule.waitForIdle()
+        assertEquals("instant", viewModel.stripePayoutState.value.selectedSpeedMethod)
+
+        composeTestRule.onNodeWithTag("stripe_dashboard_screen")
+            .performScrollToNode(hasTestTag("stripe_ui_submit_payout_button"))
+        composeTestRule.onNodeWithTag("stripe_ui_submit_payout_button").performClick()
+
+        try {
+            composeTestRule.waitUntil(timeoutMillis = 10000) {
+                org.robolectric.shadows.ShadowLooper.idleMainLooper()
+                fakeApi.lastCreatedMethod == "instant" &&
+                    composeTestRule.onAllNodesWithTag("stripe_ui_status_banner").fetchSemanticsNodes().isNotEmpty()
+            }
+        } catch (t: Throwable) {
+            throw AssertionError("Timed out waiting for payout status banner. Current stripePayoutState=${viewModel.stripePayoutState.value}", t)
+        }
+        composeTestRule.onNodeWithTag("stripe_dashboard_screen")
+            .performScrollToNode(hasTestTag("stripe_ui_status_banner"))
+        composeTestRule.onNodeWithTag("stripe_ui_status_banner").assertIsDisplayed()
+
+        composeTestRule.onNodeWithTag("stripe_dashboard_screen")
+            .performScrollToNode(hasTestTag("stripe_ui_remote_po_remote_existing_01"))
+        composeTestRule.onNodeWithTag("stripe_ui_remote_po_remote_existing_01").assertIsDisplayed()
     }
 }

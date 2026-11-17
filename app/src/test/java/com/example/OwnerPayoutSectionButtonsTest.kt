@@ -137,5 +137,39 @@ class OwnerPayoutSectionButtonsTest {
         composeTestRule.onNodeWithTag("payout_hub_btn_history").performClick()
         composeTestRule.waitForIdle()
         assertTrue(viewModel.isPayoutHistoryScreenOpen.value)
+
+        // Scroll to Vault Stripe status pill & verify inline Stripe controls in Disburse card
+        composeTestRule.onNodeWithTag("owner_payout_section_view")
+            .performScrollToNode(hasTestTag("vault_stripe_status_pill"))
+        composeTestRule.onNodeWithTag("vault_stripe_status_pill").assertIsDisplayed()
+
+        composeTestRule.onNodeWithTag("owner_payout_section_view")
+            .performScrollToNode(hasTestTag("owner_payout_select_stripe"))
+        composeTestRule.onNodeWithTag("owner_payout_select_stripe").performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("owner_payout_section_view")
+            .performScrollToNode(hasTestTag("disburse_stripe_speed_instant"))
+        composeTestRule.onNodeWithTag("disburse_stripe_speed_instant").performClick()
+        composeTestRule.waitForIdle()
+        assertEquals("instant", viewModel.stripePayoutState.value.selectedSpeedMethod)
+    }
+
+    @Test
+    fun payoutDisbursementModal_supportsStripeLiveRailAndSpeedSelection() {
+        composeTestRule.setContent {
+            MyApplicationTheme {
+                com.example.ui.PayoutDisbursementModal(
+                    viewModel = viewModel,
+                    onDismiss = {}
+                )
+            }
+        }
+
+        composeTestRule.onNodeWithTag("payout_method_stripe").assertIsDisplayed().performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("modal_stripe_details_card").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("modal_stripe_speed_instant").performClick()
+        composeTestRule.waitForIdle()
+        assertEquals("instant", viewModel.stripePayoutState.value.selectedSpeedMethod)
     }
 }

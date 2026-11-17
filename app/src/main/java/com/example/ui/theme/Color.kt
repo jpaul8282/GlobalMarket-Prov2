@@ -37,3 +37,9 @@ val CleanSuccess = Color(0xFF16A34A)
 val CleanSuccessContainer = Color(0xFFDCFCE7)
 val CleanDanger = Color(0xFFDC2626)
 val CleanDangerContainer = Color(0xFFFEE2E2)
+
+// Stripe Brand Surface Tokens
+val StripeIndigo = Color(0xFF635BFF)
+val StripeIndigoDark = Color(0xFF3730A3)
+val StripeIndigoContainer = Color(0xFFEEF2FF)
+val StripeOnIndigo = Color(0xFFFFFFFF)

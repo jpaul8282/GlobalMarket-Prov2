@@ -7,6 +7,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,20 +27,25 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.AccountBalance
+import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.FlashOn
+import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Payments
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.SwapHoriz
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -66,15 +72,22 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.data.StripeConnectionHealth
 import com.example.ui.theme.CleanBorder
 import com.example.ui.theme.CleanBorderLight
 import com.example.ui.theme.CleanBorderSubtle
+import com.example.ui.theme.CleanDanger
+import com.example.ui.theme.CleanDangerContainer
 import com.example.ui.theme.CleanOnPrimary
+import com.example.ui.theme.CleanOrange
+import com.example.ui.theme.CleanOrangeContainer
+import com.example.ui.theme.CleanOrangeText
 import com.example.ui.theme.CleanPrimary
 import com.example.ui.theme.CleanPrimaryContainer
 import com.example.ui.theme.CleanSecondary
@@ -87,6 +100,7 @@ import com.example.ui.theme.CleanSurfaceVariant
 import com.example.ui.theme.CleanTextMuted
 import com.example.ui.theme.CleanTextPrimary
 import com.example.ui.theme.CleanTextSecondary
+import com.example.util.CurrencyFormatter
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.Locale
@@ -102,7 +116,9 @@ fun PayoutDisbursementModal(
     val scope = rememberCoroutineScope()
 
     val payoutConfig by viewModel.payoutConfig.collectAsStateWithLifecycle()
+    val stripePayoutState by viewModel.stripePayoutState.collectAsStateWithLifecycle()
     val selectedCurrency by viewModel.selectedCurrency.collectAsStateWithLifecycle()
+    val currencyFormatter = remember { CurrencyFormatter.DEFAULT }
 
     var activeMethod by remember { mutableStateOf(payoutConfig.selectedMethod) }
 
@@ -118,6 +134,10 @@ fun PayoutDisbursementModal(
     var paypalEmail by remember { mutableStateOf(payoutConfig.payPal.paypalEmailOrId) }
     var paypalRecipient by remember { mutableStateOf(payoutConfig.payPal.recipientName) }
     var paypalNote by remember { mutableStateOf("GLABA Marketing Merchant Settlement") }
+
+    // Stripe Live input
+    var stripeDescription by remember { mutableStateOf("GlobalMarket Pro Owner Stripe Payout") }
+    var stripeInlineError by remember { mutableStateOf<String?>(null) }
 
     // Amount and currency
     var payoutAmountInput by remember { mutableStateOf("250.00") }
@@ -188,7 +208,7 @@ fun PayoutDisbursementModal(
                                 color = CleanTextPrimary
                             )
                             Text(
-                                text = "Bank Wire Transfer or PayPal Instant Balance",
+                                text = "Bank Wire, PayPal, or Live Stripe Payouts",
                                 fontSize = 12.sp,
                                 color = CleanTextSecondary
                             )
@@ -242,7 +262,11 @@ fun PayoutDisbursementModal(
                         )
 
                         Text(
-                            text = "Funds dispatched via ${activeMethod.displayName} to ${if (activeMethod == PayoutMethodType.BANK_WIRE) bankName else paypalEmail}.",
+                            text = when (activeMethod) {
+                                PayoutMethodType.BANK_WIRE -> "Funds dispatched via ${activeMethod.displayName} to $bankName."
+                                PayoutMethodType.PAYPAL -> "Funds dispatched via ${activeMethod.displayName} to $paypalEmail."
+                                PayoutMethodType.STRIPE_PAYOUT -> "Live payout dispatched via Stripe API (${stripePayoutState.selectedSpeedMethod.uppercase()})."
+                            },
                             fontSize = 13.sp,
                             color = CleanTextSecondary,
                             modifier = Modifier.padding(horizontal = 16.dp)
@@ -336,7 +360,7 @@ fun PayoutDisbursementModal(
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         // Bank Wire Tab Option
                         val isWireSelected = activeMethod == PayoutMethodType.BANK_WIRE
@@ -344,43 +368,38 @@ fun PayoutDisbursementModal(
                             modifier = Modifier
                                 .weight(1f)
                                 .clip(RoundedCornerShape(16.dp))
-                                .clickable { activeMethod = PayoutMethodType.BANK_WIRE }
+                                .clickable {
+                                    stripeInlineError = null
+                                    activeMethod = PayoutMethodType.BANK_WIRE
+                                }
                                 .testTag("payout_method_bank_wire"),
                             color = if (isWireSelected) CleanPrimaryContainer else CleanSurfaceSecondary,
                             border = BorderStroke(if (isWireSelected) 2.dp else 1.dp, if (isWireSelected) CleanPrimary else CleanBorder)
                         ) {
                             Column(
-                                modifier = Modifier.padding(14.dp),
-                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                                modifier = Modifier.padding(10.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.AccountBalance,
-                                        contentDescription = "Bank Wire",
-                                        tint = if (isWireSelected) CleanPrimary else CleanTextSecondary,
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                    Text(
-                                        text = "Bank Wire",
-                                        fontSize = 14.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = if (isWireSelected) CleanPrimary else CleanTextPrimary
-                                    )
-                                }
-                                Text(
-                                    text = "SWIFT / IBAN wire transfer to bank account",
-                                    fontSize = 11.sp,
-                                    color = CleanTextSecondary,
-                                    lineHeight = 14.sp
+                                Icon(
+                                    imageVector = Icons.Default.AccountBalance,
+                                    contentDescription = "Bank Wire",
+                                    tint = if (isWireSelected) CleanPrimary else CleanTextSecondary,
+                                    modifier = Modifier.size(18.dp)
                                 )
                                 Text(
-                                    text = "Fee: $15 flat • 1-2 days",
-                                    fontSize = 10.sp,
+                                    text = "Bank Wire",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (isWireSelected) CleanPrimary else CleanTextPrimary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = "$15 flat • 1-2d",
+                                    fontSize = 9.sp,
                                     fontWeight = FontWeight.SemiBold,
-                                    color = if (isWireSelected) CleanPrimary else CleanTextMuted
+                                    color = if (isWireSelected) CleanPrimary else CleanTextMuted,
+                                    maxLines = 1
                                 )
                             }
                         }
@@ -391,43 +410,83 @@ fun PayoutDisbursementModal(
                             modifier = Modifier
                                 .weight(1f)
                                 .clip(RoundedCornerShape(16.dp))
-                                .clickable { activeMethod = PayoutMethodType.PAYPAL }
+                                .clickable {
+                                    stripeInlineError = null
+                                    activeMethod = PayoutMethodType.PAYPAL
+                                }
                                 .testTag("payout_method_paypal"),
                             color = if (isPayPalSelected) CleanPrimaryContainer else CleanSurfaceSecondary,
                             border = BorderStroke(if (isPayPalSelected) 2.dp else 1.dp, if (isPayPalSelected) CleanPrimary else CleanBorder)
                         ) {
                             Column(
-                                modifier = Modifier.padding(14.dp),
-                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                                modifier = Modifier.padding(10.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Payments,
-                                        contentDescription = "PayPal",
-                                        tint = if (isPayPalSelected) CleanPrimary else CleanTextSecondary,
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                    Text(
-                                        text = "PayPal",
-                                        fontSize = 14.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = if (isPayPalSelected) CleanPrimary else CleanTextPrimary
-                                    )
-                                }
-                                Text(
-                                    text = "Direct transfer to PayPal digital wallet",
-                                    fontSize = 11.sp,
-                                    color = CleanTextSecondary,
-                                    lineHeight = 14.sp
+                                Icon(
+                                    imageVector = Icons.Default.Payments,
+                                    contentDescription = "PayPal",
+                                    tint = if (isPayPalSelected) CleanPrimary else CleanTextSecondary,
+                                    modifier = Modifier.size(18.dp)
                                 )
                                 Text(
-                                    text = "Fee: 2.9% + $0.30 • Instant",
-                                    fontSize = 10.sp,
+                                    text = "PayPal",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (isPayPalSelected) CleanPrimary else CleanTextPrimary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = "2.9%+$0.30 • Now",
+                                    fontSize = 9.sp,
                                     fontWeight = FontWeight.SemiBold,
-                                    color = if (isPayPalSelected) CleanPrimary else CleanTextMuted
+                                    color = if (isPayPalSelected) CleanPrimary else CleanTextMuted,
+                                    maxLines = 1
+                                )
+                            }
+                        }
+
+                        // Stripe Live Tab Option
+                        val isStripeSelected = activeMethod == PayoutMethodType.STRIPE_PAYOUT
+                        Surface(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(16.dp))
+                                .clickable {
+                                    stripeInlineError = null
+                                    activeMethod = PayoutMethodType.STRIPE_PAYOUT
+                                    if (stripePayoutState.lastSyncedEpochMs == null && !stripePayoutState.isCheckingConnection) {
+                                        viewModel.triggerVerifyStripeConnection()
+                                    }
+                                }
+                                .testTag("payout_method_stripe"),
+                            color = if (isStripeSelected) CleanSecondaryContainer else CleanSurfaceSecondary,
+                            border = BorderStroke(if (isStripeSelected) 2.dp else 1.dp, if (isStripeSelected) CleanSecondary else CleanBorder)
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(10.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Bolt,
+                                    contentDescription = "Stripe Live",
+                                    tint = if (isStripeSelected) CleanSecondary else CleanTextSecondary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Text(
+                                    text = "Stripe Live",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (isStripeSelected) CleanSecondary else CleanTextPrimary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = "$0 Std / 1% Inst",
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = if (isStripeSelected) CleanSecondary else CleanTextMuted,
+                                    maxLines = 1
                                 )
                             }
                         }
@@ -554,7 +613,7 @@ fun PayoutDisbursementModal(
                                 }
                             }
                         }
-                    } else {
+                    } else if (activeMethod == PayoutMethodType.PAYPAL) {
                         // PayPal Fields
                         Card(
                             modifier = Modifier.fillMaxWidth(),
@@ -609,6 +668,210 @@ fun PayoutDisbursementModal(
                                         unfocusedBorderColor = CleanBorder
                                     )
                                 )
+                            }
+                        }
+                    } else {
+                        // Stripe Live Payouts API Panel
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("modal_stripe_details_card"),
+                            shape = RoundedCornerShape(18.dp),
+                            colors = CardDefaults.cardColors(containerColor = CleanSurfaceSecondary),
+                            border = BorderStroke(1.dp, CleanSecondary.copy(alpha = 0.5f))
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "STRIPE LIVE PAYOUTS (${stripePayoutState.environmentLabel})",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = CleanSecondary
+                                        )
+                                        Text(
+                                            text = "Health: ${stripePayoutState.connectionHealth.label} • Secret: ${stripePayoutState.maskedKeyPreview}",
+                                            fontSize = 10.sp,
+                                            fontFamily = FontFamily.Monospace,
+                                            color = CleanTextSecondary,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+
+                                    TextButton(
+                                        onClick = { viewModel.triggerVerifyStripeConnection() },
+                                        enabled = !stripePayoutState.isCheckingConnection,
+                                        modifier = Modifier.testTag("modal_stripe_verify_button")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.CloudSync,
+                                            contentDescription = "Verify Stripe",
+                                            tint = CleanSecondary,
+                                            modifier = Modifier.size(14.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text(
+                                            text = if (stripePayoutState.isCheckingConnection) "Syncing" else "Sync API",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = CleanSecondary
+                                        )
+                                    }
+                                }
+
+                                val modalAvail = stripePayoutState.availableBalances.firstOrNull()
+                                if (modalAvail != null) {
+                                    Text(
+                                        text = "Live Stripe Available: ${currencyFormatter.format(modalAvail.majorAmount, modalAvail.currencyCode)}",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = CleanSuccess
+                                    )
+                                }
+
+                                if (!stripePayoutState.isKeyConfigured) {
+                                    Surface(
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = CleanOrangeContainer.copy(alpha = 0.65f),
+                                        border = BorderStroke(1.dp, CleanOrange.copy(alpha = 0.45f)),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(10.dp),
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                            verticalAlignment = Alignment.Top
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Key,
+                                                contentDescription = null,
+                                                tint = CleanOrange,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                            Text(
+                                                text = if (stripePayoutState.isPublishableKeyMistakenForSecret) {
+                                                    "STRIPE_SECRET_KEY has a Publishable Key (pk_...). Set your Secret Key (sk_live_... or sk_test_...) in the AI Studio Secrets panel."
+                                                } else {
+                                                    "Configure STRIPE_SECRET_KEY and STRIPE_PUBLISHABLE_KEY in the AI Studio Secrets panel to send live payouts."
+                                                },
+                                                fontSize = 11.sp,
+                                                color = CleanTextPrimary,
+                                                lineHeight = 14.sp
+                                            )
+                                        }
+                                    }
+                                }
+
+                                // Speed Selector (Standard vs Instant)
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    val isStd = stripePayoutState.selectedSpeedMethod == "standard"
+                                    OutlinedButton(
+                                        onClick = { viewModel.setStripePayoutSpeed("standard") },
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .height(42.dp)
+                                            .testTag("modal_stripe_speed_standard"),
+                                        shape = RoundedCornerShape(12.dp),
+                                        colors = ButtonDefaults.outlinedButtonColors(
+                                            containerColor = if (isStd) CleanSecondaryContainer else CleanSurface,
+                                            contentColor = if (isStd) CleanSecondary else CleanTextSecondary
+                                        ),
+                                        border = BorderStroke(1.dp, if (isStd) CleanSecondary else CleanBorder)
+                                    ) {
+                                        Text("Standard ($0)", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    }
+
+                                    val isInst = stripePayoutState.selectedSpeedMethod == "instant"
+                                    OutlinedButton(
+                                        onClick = { viewModel.setStripePayoutSpeed("instant") },
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .height(42.dp)
+                                            .testTag("modal_stripe_speed_instant"),
+                                        shape = RoundedCornerShape(12.dp),
+                                        colors = ButtonDefaults.outlinedButtonColors(
+                                            containerColor = if (isInst) CleanOrangeContainer else CleanSurface,
+                                            contentColor = if (isInst) CleanOrangeText else CleanTextSecondary
+                                        ),
+                                        border = BorderStroke(1.dp, if (isInst) CleanOrange else CleanBorder)
+                                    ) {
+                                        Text("Instant (1%)", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+
+                                if (stripePayoutState.externalAccounts.isNotEmpty()) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .horizontalScroll(rememberScrollState()),
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        stripePayoutState.externalAccounts.forEach { ext ->
+                                            val isDest = stripePayoutState.selectedDestinationId == ext.id
+                                            FilterChip(
+                                                selected = isDest,
+                                                onClick = { viewModel.selectStripeDestination(ext.id) },
+                                                label = {
+                                                    Text(
+                                                        text = "${ext.label} ••••${ext.last4}",
+                                                        fontSize = 10.sp
+                                                    )
+                                                },
+                                                modifier = Modifier.testTag("modal_stripe_dest_${ext.id}")
+                                            )
+                                        }
+                                    }
+                                }
+
+                                OutlinedTextField(
+                                    value = stripeDescription,
+                                    onValueChange = { stripeDescription = it },
+                                    label = { Text("Stripe Statement Description") },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    singleLine = true,
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedBorderColor = CleanSecondary,
+                                        unfocusedBorderColor = CleanBorder
+                                    )
+                                )
+
+                                val displayError = stripeInlineError ?: stripePayoutState.errorMessage
+                                if (!displayError.isNullOrBlank()) {
+                                    Surface(
+                                        shape = RoundedCornerShape(10.dp),
+                                        color = CleanDangerContainer,
+                                        border = BorderStroke(1.dp, CleanDanger.copy(alpha = 0.4f)),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(10.dp),
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                            verticalAlignment = Alignment.Top
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Warning,
+                                                contentDescription = null,
+                                                tint = CleanDanger,
+                                                modifier = Modifier.size(15.dp)
+                                            )
+                                            Text(
+                                                text = displayError,
+                                                fontSize = 11.sp,
+                                                color = CleanDanger
+                                            )
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -776,15 +1039,27 @@ fun PayoutDisbursementModal(
                                 modifier = Modifier.padding(top = 4.dp)
                             ) {
                                 Icon(
-                                    imageVector = if (activeMethod == PayoutMethodType.PAYPAL) Icons.Default.FlashOn else Icons.Default.AccountBalance,
+                                    imageVector = when (activeMethod) {
+                                        PayoutMethodType.PAYPAL -> Icons.Default.FlashOn
+                                        PayoutMethodType.STRIPE_PAYOUT -> Icons.Default.Bolt
+                                        PayoutMethodType.BANK_WIRE -> Icons.Default.AccountBalance
+                                    },
                                     contentDescription = null,
-                                    tint = CleanPrimary,
+                                    tint = if (activeMethod == PayoutMethodType.STRIPE_PAYOUT) CleanSecondary else CleanPrimary,
                                     modifier = Modifier.size(14.dp)
                                 )
                                 Text(
-                                    text = if (activeMethod == PayoutMethodType.PAYPAL) "Instant settlement to PayPal account" else "SWIFT interbank wire: 1-2 business days",
+                                    text = when (activeMethod) {
+                                        PayoutMethodType.PAYPAL -> "Instant settlement to PayPal account"
+                                        PayoutMethodType.STRIPE_PAYOUT -> if (stripePayoutState.selectedSpeedMethod == "instant") {
+                                            "Stripe Instant Payout: arrives in minutes (1% fee)"
+                                        } else {
+                                            "Stripe Standard Payout: 1-2 business days ($0 fee)"
+                                        }
+                                        PayoutMethodType.BANK_WIRE -> "SWIFT interbank wire: 1-2 business days"
+                                    },
                                     fontSize = 11.sp,
-                                    color = CleanPrimary,
+                                    color = if (activeMethod == PayoutMethodType.STRIPE_PAYOUT) CleanSecondary else CleanPrimary,
                                     fontWeight = FontWeight.Medium
                                 )
                             }
@@ -804,7 +1079,7 @@ fun PayoutDisbursementModal(
                             modifier = Modifier.size(16.dp)
                         )
                         Text(
-                            text = "256-bit TLS encrypted • ISO 20022 / PayPal Payouts API compliant",
+                            text = "256-bit TLS encrypted • ISO 20022 / Stripe & PayPal Payouts API",
                             fontSize = 11.sp,
                             color = CleanTextSecondary
                         )
@@ -829,7 +1104,7 @@ fun PayoutDisbursementModal(
                                             country = bankCountry
                                         )
                                     )
-                                } else {
+                                } else if (activeMethod == PayoutMethodType.PAYPAL) {
                                     viewModel.updatePayPalDetails(
                                         PayPalDetails(
                                             paypalEmailOrId = paypalEmail,
@@ -855,6 +1130,27 @@ fun PayoutDisbursementModal(
                                     Toast.makeText(context, "Please enter a valid payout amount", Toast.LENGTH_SHORT).show()
                                     return@Button
                                 }
+                                if (activeMethod == PayoutMethodType.STRIPE_PAYOUT) {
+                                    stripeInlineError = null
+                                    isDisbursing = true
+                                    viewModel.executeLiveStripePayout(
+                                        amountInUsd = parsedAmountUsd,
+                                        currencyCode = selectedPayoutCurrency.code,
+                                        speedMethod = stripePayoutState.selectedSpeedMethod,
+                                        description = stripeDescription.ifBlank { null },
+                                        onResult = { ok, msg ->
+                                            isDisbursing = false
+                                            if (ok) {
+                                                completedReference = viewModel.lastDisbursedPayoutReference.value ?: "po_stripe_live"
+                                                completedAmount = parsedAmountUsd
+                                            } else {
+                                                stripeInlineError = msg
+                                            }
+                                            Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                                        }
+                                    )
+                                    return@Button
+                                }
                                 isDisbursing = true
                                 scope.launch {
                                     delay(900) // Simulated processing animation
@@ -868,7 +1164,7 @@ fun PayoutDisbursementModal(
                                         recipientName = recipient,
                                         destinationIdentifier = destination,
                                         notes = if (activeMethod == PayoutMethodType.PAYPAL) paypalNote else "Wire to $bankName ($swiftBic)",
-                                        onSuccess = { created ->
+                                        onSuccess = { _ ->
                                             completedReference = viewModel.lastDisbursedPayoutReference.value
                                             completedAmount = parsedAmountUsd
                                             isDisbursing = false
@@ -882,7 +1178,9 @@ fun PayoutDisbursementModal(
                                 .height(50.dp)
                                 .testTag("confirm_payout_button"),
                             shape = RoundedCornerShape(14.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = CleanPrimary)
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (activeMethod == PayoutMethodType.STRIPE_PAYOUT) CleanSecondary else CleanPrimary
+                            )
                         ) {
                             if (isDisbursing) {
                                 CircularProgressIndicator(
@@ -891,12 +1189,18 @@ fun PayoutDisbursementModal(
                                     strokeWidth = 2.dp
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text("Disbursing...", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                Text(
+                                    text = if (activeMethod == PayoutMethodType.STRIPE_PAYOUT) "Calling Stripe..." else "Disbursing...",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
                             } else {
                                 Text(
                                     text = "Disburse ${activeMethod.displayName}",
                                     fontSize = 13.sp,
-                                    fontWeight = FontWeight.Bold
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             }
                         }

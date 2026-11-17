@@ -1667,6 +1667,9 @@ class GlobalMarketViewModel(
     private val _isPayoutHistoryScreenOpen = MutableStateFlow(false)
     val isPayoutHistoryScreenOpen: StateFlow<Boolean> = _isPayoutHistoryScreenOpen.asStateFlow()
 
+    private val _isStripeUiOpen = MutableStateFlow(false)
+    val isStripeUiOpen: StateFlow<Boolean> = _isStripeUiOpen.asStateFlow()
+
     private val _lastDisbursedPayoutReference = MutableStateFlow<String?>(null)
     val lastDisbursedPayoutReference: StateFlow<String?> = _lastDisbursedPayoutReference.asStateFlow()
 
@@ -1706,6 +1709,14 @@ class GlobalMarketViewModel(
 
     fun closePayoutHistoryScreen() {
         _isPayoutHistoryScreenOpen.value = false
+    }
+
+    fun openStripeUi() {
+        _isStripeUiOpen.value = true
+    }
+
+    fun closeStripeUi() {
+        _isStripeUiOpen.value = false
     }
 
     fun openPayoutModal() {
@@ -2032,8 +2043,12 @@ class GlobalMarketViewModel(
             }
             is StripePayoutApiResult.Success -> {
                 val verification = result.data
-                verification.recentPayouts.forEach { remote ->
-                    persistRemoteStripePayoutToRoom(remote)
+                try {
+                    verification.recentPayouts.forEach { remote ->
+                        persistRemoteStripePayoutToRoom(remote)
+                    }
+                } catch (_: Exception) {
+                    // Preserve remote API verification state even if local Room sync encounters an issue
                 }
                 val acct = verification.accountInfo
                 val externals = acct?.externalAccounts.orEmpty()
