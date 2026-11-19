@@ -17,8 +17,8 @@ android {
     applicationId = "com.aistudio.globalmarketpro.mfxvqz"
     minSdk = 24
     targetSdk = 36
-    versionCode = 12
-    versionName = "12.0"
+    versionCode = 13
+    versionName = "13.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -123,6 +123,7 @@ dependencies {
   implementation(libs.okhttp)
   // implementation(libs.play.services.location)
   implementation(libs.retrofit)
+  implementation(libs.stripe.android)
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)
   testImplementation(libs.androidx.junit)

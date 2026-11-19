@@ -200,6 +200,24 @@ fun TransactionSummaryScreen(
                     }
 
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        // Stripe SDK Localized Terminal Checkout trigger
+                        IconButton(
+                            onClick = { viewModel.openCheckout() },
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(StripeIndigoContainer)
+                                .border(BorderStroke(1.dp, StripeIndigo.copy(alpha = 0.35f)), CircleShape)
+                                .testTag("summary_stripe_terminal_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.PointOfSale,
+                                contentDescription = "Open Stripe SDK Terminal Checkout",
+                                tint = StripeIndigo,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+
                         // Barcode scanner trigger
                         IconButton(
                             onClick = { viewModel.openBarcodeScanner() },

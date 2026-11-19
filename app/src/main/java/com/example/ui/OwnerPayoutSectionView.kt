@@ -70,12 +70,17 @@ fun OwnerPayoutSectionView(
     val transactionLogs by viewModel.transactionLogs.collectAsStateWithLifecycle()
     val payoutWireHistory by viewModel.payoutWireHistory.collectAsStateWithLifecycle()
     val stripePayoutState by viewModel.stripePayoutState.collectAsStateWithLifecycle()
+    val firestorePayoutStreamState by viewModel.firestorePayoutStreamState.collectAsStateWithLifecycle()
     val selectedCurrency by viewModel.selectedCurrency.collectAsStateWithLifecycle()
     val currencyFormatter = remember { CurrencyFormatter.DEFAULT }
 
-    // Owner financial calculations
+    // Owner financial calculations (exclude payout mirror entries so disbursements don't inflate gross revenue)
     val totalGrossRevenueUsd = remember(transactions) {
-        transactions.sumOf { it.amountInUsd }
+        transactions.filterNot {
+            it.customerName.startsWith("Payout (") ||
+                it.customerName.startsWith("Stripe Payout:") ||
+                it.stripeSubscriptionId.startsWith("po_")
+        }.sumOf { it.amountInUsd }
     }
 
     // Payout transactions history from Room logs
@@ -131,16 +136,14 @@ fun OwnerPayoutSectionView(
 
     val scrollToSectionKey: (String) -> Unit = { targetKey ->
         scope.launch {
-            val targetIdx = listState.layoutInfo.totalItemsCount.let {
-                // Find by matching item keys if visible, or use stable layout ordering
-                when (targetKey) {
-                    "stripe_section" -> 5
-                    "disburse_section" -> if (lastSuccessRef != null) 7 else 6
-                    "trends_section" -> if (lastSuccessRef != null) 8 else 7
-                    else -> 0
-                }
+            val maxIndex = (listState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0)
+            val desiredIndex = when (targetKey) {
+                "stripe_section" -> 6
+                "disburse_section" -> if (lastSuccessRef != null) 8 else 7
+                "trends_section" -> if (lastSuccessRef != null) 9 else 8
+                else -> 0
             }
-            listState.animateScrollToItem(targetIdx)
+            listState.animateScrollToItem(desiredIndex.coerceIn(0, maxIndex))
         }
     }
 
@@ -271,24 +274,6 @@ fun OwnerPayoutSectionView(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        IconButton(
-                            onClick = { viewModel.openStripeUi() },
-                            modifier = Modifier
-                                .minimumInteractiveComponentSize()
-                                .size(44.dp)
-                                .clip(CircleShape)
-                                .background(StripeIndigoContainer)
-                                .border(BorderStroke(1.dp, StripeIndigo.copy(alpha = 0.45f)), CircleShape)
-                                .testTag("owner_open_stripe_ui_button")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Bolt,
-                                contentDescription = "Open Full Stripe UI",
-                                tint = StripeIndigo,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
-
                         IconButton(
                             onClick = { viewModel.openPayoutHistoryScreen() },
                             modifier = Modifier
@@ -590,6 +575,22 @@ fun OwnerPayoutSectionView(
             }
         }
 
+        // 2.0 REAL-TIME CLOUD FIRESTORE PAYOUT STATUS MONITOR
+        item {
+            FirestoreLivePayoutStatusPanel(
+                streamState = firestorePayoutStreamState,
+                currencyFormatter = currencyFormatter,
+                onRetry = { viewModel.retryFirestorePayoutListener() },
+                onSelectPayout = { record ->
+                    Toast.makeText(
+                        context,
+                        "${record.payoutId} • ${record.status}",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+            )
+        }
+
         // 2A. OWNER PAYOUT ACTION BUTTONS HUB
         item {
             Card(
@@ -816,24 +817,6 @@ fun OwnerPayoutSectionView(
                                 Icon(imageVector = Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(15.dp))
                                 Spacer(modifier = Modifier.width(5.dp))
                                 Text("Edit Accounts", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                            }
-                        }
-                        item {
-                            FilledTonalButton(
-                                onClick = { viewModel.openStripeUi() },
-                                modifier = Modifier
-                                    .height(48.dp)
-                                    .testTag("payout_hub_btn_stripe_ui"),
-                                shape = RoundedCornerShape(12.dp),
-                                colors = ButtonDefaults.filledTonalButtonColors(
-                                    containerColor = StripeIndigoContainer,
-                                    contentColor = StripeIndigo
-                                ),
-                                contentPadding = PaddingValues(horizontal = 12.dp)
-                            ) {
-                                Icon(imageVector = Icons.Default.Bolt, contentDescription = null, modifier = Modifier.size(15.dp))
-                                Spacer(modifier = Modifier.width(5.dp))
-                                Text("Stripe UI", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                             }
                         }
                         item {
@@ -2160,6 +2143,10 @@ fun OwnerPayoutSectionView(
                 }
             }
         } else if (filteredPayoutWires.isNotEmpty()) {
+            val cloudSyncedRefs = (firestorePayoutStreamState as? FirestorePayoutStreamState.Live)
+                ?.payouts
+                ?.mapTo(mutableSetOf()) { it.payoutId }
+                ?: emptySet()
             items(
                 items = filteredPayoutWires,
                 key = { "wire_${it.id}" }
@@ -2167,6 +2154,7 @@ fun OwnerPayoutSectionView(
                 PayoutWireHistoryCard(
                     record = wireRecord,
                     currencyFormatter = currencyFormatter,
+                    isCloudSynced = wireRecord.referenceCode in cloudSyncedRefs,
                     onToggleStatus = {
                         val nextStatus = if (wireRecord.status == "SETTLED") "COMPLETED" else "SETTLED"
                         viewModel.updatePayoutWireStatus(wireRecord.id, nextStatus)
@@ -2213,7 +2201,8 @@ fun OwnerPayoutSectionView(
 fun PayoutWireHistoryCard(
     record: PayoutWireEntity,
     currencyFormatter: CurrencyFormatter,
-    onToggleStatus: () -> Unit
+    onToggleStatus: () -> Unit,
+    isCloudSynced: Boolean = false
 ) {
     val dateString = remember(record.timestamp) {
         SimpleDateFormat("MMM dd, yyyy • HH:mm", Locale.getDefault()).format(Date(record.timestamp))
@@ -2322,6 +2311,14 @@ fun PayoutWireHistoryCard(
                                     modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
                                 )
                             }
+                            if (isCloudSynced) {
+                                Icon(
+                                    imageVector = Icons.Default.CloudDone,
+                                    contentDescription = "Synced with Firestore",
+                                    tint = CleanSuccess,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                            }
                         }
                         Text(
                             text = "$dateString • ${record.referenceCode}",
@@ -2392,21 +2389,11 @@ fun PayoutWireHistoryCard(
                         Text("Copy Ref", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = CleanPrimary)
                     }
 
-                    Surface(
+                    PayoutStatusPill(
+                        status = record.status,
                         onClick = onToggleStatus,
-                        shape = RoundedCornerShape(8.dp),
-                        color = CleanSuccessContainer,
-                        border = BorderStroke(1.dp, CleanSuccess.copy(alpha = 0.3f)),
                         modifier = Modifier.testTag("payout_wire_toggle_status_${record.id}")
-                    ) {
-                        Text(
-                            text = record.status,
-                            fontSize = 9.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = CleanSuccess,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                        )
-                    }
+                    )
                 }
             }
         }

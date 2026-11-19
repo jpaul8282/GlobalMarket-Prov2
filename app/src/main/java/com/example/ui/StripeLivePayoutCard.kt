@@ -178,6 +178,7 @@ fun StripeLivePayoutCard(
                 Surface(
                     shape = RoundedCornerShape(10.dp),
                     color = when {
+                        stripeState.isPublishableKeyMistakenForSecret -> CleanDangerContainer
                         stripeState.isLiveMode -> CleanSuccessContainer
                         stripeState.isKeyConfigured -> CleanOrangeContainer
                         else -> CleanTertiaryContainer
@@ -185,6 +186,7 @@ fun StripeLivePayoutCard(
                     border = BorderStroke(
                         1.dp,
                         when {
+                            stripeState.isPublishableKeyMistakenForSecret -> CleanDanger.copy(alpha = 0.45f)
                             stripeState.isLiveMode -> CleanSuccess.copy(alpha = 0.45f)
                             stripeState.isKeyConfigured -> CleanOrange.copy(alpha = 0.45f)
                             else -> CleanTertiary.copy(alpha = 0.45f)
@@ -199,6 +201,7 @@ fun StripeLivePayoutCard(
                         fontSize = 9.sp,
                         fontWeight = FontWeight.ExtraBold,
                         color = when {
+                            stripeState.isPublishableKeyMistakenForSecret -> CleanDanger
                             stripeState.isLiveMode -> CleanSuccess
                             stripeState.isKeyConfigured -> CleanOrangeText
                             else -> CleanTertiary
@@ -584,6 +587,15 @@ fun StripeLivePayoutCard(
                                 }
                             }
                         }
+                    }
+                    val selectedDest = stripeState.externalAccounts.firstOrNull { it.id == stripeState.selectedDestinationId }
+                    if (selectedDest != null && !selectedDest.currencyCode.equals(currencyCode, ignoreCase = true)) {
+                        Text(
+                            text = "Note: ${selectedDest.label} ••••${selectedDest.last4} settles in ${selectedDest.currencyCode}. Match payout currency to ${selectedDest.currencyCode} or choose Auto Default.",
+                            fontSize = 10.sp,
+                            color = CleanOrangeText,
+                            lineHeight = 14.sp
+                        )
                     }
                 }
             }

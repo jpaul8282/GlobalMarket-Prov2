@@ -1,7 +1,7 @@
-import { test, before, after } from 'node:test';
-import assert from 'node:assert/strict';
-import { initializeTestEnvironment, assertFails, assertSucceeds } from '@firebase/rules-unit-testing';
-import fs from 'node:fs';
+const { test, before, after } = require('node:test');
+const assert = require('node:assert/strict');
+const { initializeTestEnvironment, assertFails, assertSucceeds } = require('@firebase/rules-unit-testing');
+const fs = require('node:fs');
 
 const PROJECT_ID = 'demo-no-project';
 const DATABASE_ID = 'ai-studio-android-globalma-23676576-cf60-473f-867b-83a68e2777b3';
@@ -106,7 +106,8 @@ test('Owner can create and read payout settings and disbursements', async () => 
       recipientName: 'Alice Merchant',
       reference: 'WIRE-2026-001',
       status: 'SETTLED',
-      createdAt: new Date(),
+      createdAt: new Date(Date.now() - 1000),
+      updatedAt: new Date(Date.now() - 1000),
     })
   );
 
@@ -115,3 +116,66 @@ test('Owner can create and read payout settings and disbursements', async () => 
     aliceDb.collection('users').doc('alice').collection('payouts').doc('payout_001').delete()
   );
 });
+
+test('Owner can create Stripe payout and update status in real time while immutable fields remain protected', async () => {
+  const aliceDb = testEnv.authenticatedContext('alice').firestore();
+  const bobDb = testEnv.authenticatedContext('bob').firestore();
+  const created = new Date(Date.now() - 5000);
+
+  // Create STRIPE_PAYOUT record in PROCESSING state
+  const payoutRef = aliceDb.collection('users').doc('alice').collection('payouts').doc('po_live_001');
+  await assertSucceeds(
+    payoutRef.set({
+      userId: 'alice',
+      payoutId: 'po_live_001',
+      method: 'STRIPE_PAYOUT',
+      amount: 420.0,
+      fee: 4.2,
+      netAmount: 415.8,
+      currency: 'EUR',
+      recipientName: 'Alice Merchant',
+      destinationSummary: 'ba_1INGNL01',
+      reference: 'po_live_001',
+      status: 'PROCESSING',
+      createdAt: created,
+      updatedAt: created,
+    })
+  );
+
+  // Owner can update status -> SETTLED / CANCELED / FAILED
+  await assertSucceeds(
+    payoutRef.update({
+      status: 'SETTLED',
+      updatedAt: new Date(Date.now() - 500),
+    })
+  );
+
+  // Invalid status is rejected
+  await assertFails(
+    payoutRef.update({
+      status: 'ARBITRARY_STATUS',
+      updatedAt: new Date(Date.now() - 400),
+    })
+  );
+
+  // Tampering with immutable createdAt is rejected
+  await assertFails(
+    payoutRef.update({
+      status: 'PAID',
+      createdAt: new Date(Date.now() - 100),
+      updatedAt: new Date(Date.now() - 100),
+    })
+  );
+
+  // Cross-user read and update are rejected
+  await assertFails(
+    bobDb.collection('users').doc('alice').collection('payouts').doc('po_live_001').get()
+  );
+  await assertFails(
+    bobDb.collection('users').doc('alice').collection('payouts').doc('po_live_001').update({
+      status: 'CANCELED',
+      updatedAt: new Date(Date.now() - 200),
+    })
+  );
+});
+

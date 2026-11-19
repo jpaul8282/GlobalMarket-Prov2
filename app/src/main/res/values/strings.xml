@@ -1,3 +1,9 @@
 <resources>
     <string name="app_name">GlobalMarket Pro</string>
+    <string name="paymentsheet_mode_label">PaymentSheet</string>
+    <string name="paymentsheet_config_title">Stripe PaymentSheet Configuration</string>
+    <string name="paymentsheet_customer_presets_label">Simulated Customer Profile</string>
+    <string name="paymentsheet_simulated_outcome_label">Simulated Checkout Outcome</string>
+    <string name="paymentsheet_launch_sim_cta">Simulate PaymentSheet Checkout</string>
+    <string name="paymentsheet_launch_native_cta">Launch Native Stripe Sheet</string>
 </resources>

@@ -1,5 +1,6 @@
 package com.example.ui
 
+import android.content.Context
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -8,12 +9,24 @@ import com.example.data.*
 import com.example.util.PayoutExportFormat
 import com.example.util.PayoutExportScope
 import com.example.util.PayoutHistoryExporter
+import com.google.firebase.firestore.FirebaseFirestoreException
+import com.stripe.android.paymentsheet.PaymentSheet
+import com.stripe.android.paymentsheet.PaymentSheetResult
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.util.UUID
@@ -164,10 +177,45 @@ data class MerchantPayoutConfig(
     val preferredCurrency: String = "USD"
 )
 
+sealed interface FirestorePayoutStreamState {
+    data object Unavailable : FirestorePayoutStreamState
+    data object Connecting : FirestorePayoutStreamState
+    data class Live(
+        val payouts: List<FirestoreOwnerPayoutRecord>,
+        val lastEventEpochMs: Long,
+        val latestStatusChange: String? = null
+    ) : FirestorePayoutStreamState
+    data class Error(val message: String) : FirestorePayoutStreamState
+}
+
+sealed interface StripeTerminalCheckoutState {
+    data object Idle : StripeTerminalCheckoutState
+    data object ValidatingInput : StripeTerminalCheckoutState
+    data class TokenizingWithStripeSdk(
+        val railLabel: String,
+        val currencyCode: String
+    ) : StripeTerminalCheckoutState
+    data class Requires3dsAction(
+        val challenge: Stripe3dsChallenge
+    ) : StripeTerminalCheckoutState
+    data class ConfirmingPaymentIntent(
+        val paymentIntentId: String
+    ) : StripeTerminalCheckoutState
+    data class Succeeded(
+        val receipt: StripeTerminalReceipt
+    ) : StripeTerminalCheckoutState
+    data class Failed(
+        val errorCode: String,
+        val message: String,
+        val isRetryable: Boolean = true
+    ) : StripeTerminalCheckoutState
+}
+
 class GlobalMarketViewModel(
     private val repository: TransactionRepository,
     private val firestoreRepository: com.example.data.FirestoreRepository? = null,
-    private val stripePayoutGateway: StripePayoutGateway = StripePayoutGateway()
+    private val stripePayoutGateway: StripePayoutGateway = StripePayoutGateway(),
+    private val stripeTerminalProcessor: StripeTerminalPaymentProcessor = StripeTerminalPaymentProcessor()
 ) : ViewModel() {
 
     // Localization Translations
@@ -710,8 +758,8 @@ class GlobalMarketViewModel(
         // Initialize default payment rail for starting currency EUR
         _selectedPaymentRail.value = getPaymentRailsForCurrency("EUR").firstOrNull()
 
-        // Seed sample scanned products in Room database if empty
-        viewModelScope.launch {
+        // Seed sample scanned products in Room database if empty (off main thread)
+        viewModelScope.launch(Dispatchers.IO) {
             try {
                 val currentCount = repository.scannedProductCount.first()
                 if (currentCount == 0) {
@@ -885,7 +933,11 @@ class GlobalMarketViewModel(
                         }
                     }
                     firestoreRepo.getPayoutSetting().getOrNull()?.let { cloudSetting ->
-                        val method = if (cloudSetting.selectedMethod == "PAYPAL") PayoutMethodType.PAYPAL else PayoutMethodType.BANK_WIRE
+                        val method = when (cloudSetting.selectedMethod.uppercase()) {
+                            "PAYPAL" -> PayoutMethodType.PAYPAL
+                            "STRIPE_PAYOUT" -> PayoutMethodType.STRIPE_PAYOUT
+                            else -> PayoutMethodType.BANK_WIRE
+                        }
                         _payoutConfig.value = _payoutConfig.value.copy(
                             selectedMethod = method,
                             bankWire = _payoutConfig.value.bankWire.copy(
@@ -2043,12 +2095,8 @@ class GlobalMarketViewModel(
             }
             is StripePayoutApiResult.Success -> {
                 val verification = result.data
-                try {
-                    verification.recentPayouts.forEach { remote ->
-                        persistRemoteStripePayoutToRoom(remote)
-                    }
-                } catch (_: Exception) {
-                    // Preserve remote API verification state even if local Room sync encounters an issue
+                verification.recentPayouts.forEach { remote ->
+                    persistRemoteStripePayoutToRoom(remote)
                 }
                 val acct = verification.accountInfo
                 val externals = acct?.externalAccounts.orEmpty()
@@ -2132,13 +2180,18 @@ class GlobalMarketViewModel(
             statusMessage = null
         )
 
+        val descriptor = if (speedMethod.equals("instant", ignoreCase = true)) {
+            "GLABA PRO"
+        } else {
+            "GLOBALMARKET PRO"
+        }
         val result = stripePayoutGateway.createPayout(
             majorAmount = targetMajorAmount,
             currencyCode = currency.code,
             speedMethod = speedMethod,
             destinationId = destinationId,
             description = description ?: "GlobalMarket Pro Owner Payout (${currency.code})",
-            statementDescriptor = "GLOBALMARKET PRO",
+            statementDescriptor = descriptor,
             idempotencyKey = "gm_po_${System.currentTimeMillis()}_${(100..999).random()}"
         )
         val latencyMs = (System.currentTimeMillis() - startedAtMs).coerceAtLeast(1L)
@@ -2152,10 +2205,17 @@ class GlobalMarketViewModel(
                     fxRate = fxRate,
                     country = currency.defaultCountry
                 )
+                val refreshedBalance = (stripePayoutGateway.fetchBalance() as? StripePayoutApiResult.Success)?.data
                 val updatedRemote = listOf(created) + _stripePayoutState.value.remotePayouts.filterNot { it.id == created.id }
                 _stripePayoutState.value = _stripePayoutState.value.copy(
-                    connectionHealth = StripeConnectionHealth.CONNECTED,
+                    connectionHealth = if (_stripePayoutState.value.isRestrictedKey) {
+                        StripeConnectionHealth.RESTRICTED_CONNECTED
+                    } else {
+                        StripeConnectionHealth.CONNECTED
+                    },
                     isSubmittingPayout = false,
+                    availableBalances = refreshedBalance?.available ?: _stripePayoutState.value.availableBalances,
+                    pendingBalances = refreshedBalance?.pending ?: _stripePayoutState.value.pendingBalances,
                     remotePayouts = updatedRemote,
                     lastStripePayout = created,
                     lastLatencyMs = latencyMs,
@@ -2168,6 +2228,7 @@ class GlobalMarketViewModel(
             }
             is StripePayoutApiResult.MissingApiKey -> {
                 _stripePayoutState.value = _stripePayoutState.value.copy(
+                    connectionHealth = StripeConnectionHealth.KEY_REQUIRED,
                     isSubmittingPayout = false,
                     errorMessage = result.message
                 )
@@ -2175,7 +2236,13 @@ class GlobalMarketViewModel(
             }
             is StripePayoutApiResult.ApiError -> {
                 _stripePayoutState.value = _stripePayoutState.value.copy(
+                    connectionHealth = if (result.httpCode == 401 || result.stripeErrorCode == "publishable_key_used_as_secret") {
+                        StripeConnectionHealth.ERROR
+                    } else {
+                        _stripePayoutState.value.connectionHealth
+                    },
                     isSubmittingPayout = false,
+                    lastRequestId = StripePayoutClient.lastRequestId,
                     errorMessage = result.message
                 )
                 result
@@ -2214,11 +2281,19 @@ class GlobalMarketViewModel(
         return when (result) {
             is StripePayoutApiResult.Success -> {
                 val updated = result.data
+                val mappedStatus = StripePayoutGateway.mapStripeStatusToRoomStatus(updated.status)
                 val existing = repository.getPayoutWireByReference(payoutId).first()
                 if (existing != null) {
                     repository.updatePayoutWire(
-                        existing.copy(status = StripePayoutGateway.mapStripeStatusToRoomStatus(updated.status))
+                        existing.copy(status = mappedStatus)
                     )
+                }
+                firestoreRepository?.let { firestoreRepo ->
+                    try {
+                        firestoreRepo.updateOwnerPayoutStatus(payoutId, mappedStatus)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (_: Exception) {}
                 }
                 val updatedList = _stripePayoutState.value.remotePayouts.map {
                     if (it.id == payoutId) updated else it
@@ -2382,6 +2457,7 @@ class GlobalMarketViewModel(
         if (existing != null) {
             if (existing.status != roomStatus) {
                 repository.updatePayoutWire(existing.copy(status = roomStatus))
+                syncPayoutStatusToFirestore(existing.copy(status = roomStatus), roomStatus)
             }
             return
         }
@@ -2545,8 +2621,41 @@ class GlobalMarketViewModel(
 
     fun updatePayoutWireStatus(id: Long, newStatus: String) {
         viewModelScope.launch {
-            repository.updatePayoutWireStatus(id, newStatus)
+            val normalizedStatus = newStatus.uppercase()
+            repository.updatePayoutWireStatus(id, normalizedStatus)
+            val updatedEntity = repository.getPayoutWireById(id).first()
+            if (updatedEntity != null) {
+                syncPayoutStatusToFirestore(updatedEntity, normalizedStatus)
+            }
         }
+    }
+
+    private suspend fun syncPayoutStatusToFirestore(entity: PayoutWireEntity, newStatus: String) {
+        val firestoreRepo = firestoreRepository ?: return
+        try {
+            val updateRes = firestoreRepo.updateOwnerPayoutStatus(entity.referenceCode, newStatus)
+            if (updateRes.isFailure) {
+                // If document wasn't created in Firestore yet, upsert it so real-time stream reflects it
+                val uid = firestoreRepo.requireUserId()
+                firestoreRepo.recordOwnerPayout(
+                    FirestoreOwnerPayoutRecord(
+                        userId = uid,
+                        payoutId = entity.referenceCode,
+                        method = entity.method,
+                        amount = entity.convertedAmount.takeIf { it > 0.0 } ?: entity.grossAmountUsd.coerceAtLeast(0.01),
+                        fee = entity.feeUsd,
+                        netAmount = entity.netAmountUsd,
+                        currency = entity.currencyCode,
+                        recipientName = entity.recipientName.ifBlank { _payoutConfig.value.bankWire.accountHolderName },
+                        destinationSummary = entity.ibanOrAccount,
+                        reference = entity.referenceCode,
+                        status = newStatus
+                    )
+                )
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {}
     }
 
     fun deletePayoutWireRecord(record: PayoutWireEntity) {
@@ -2830,6 +2939,144 @@ class GlobalMarketViewModel(
             started = SharingStarted.WhileSubscribed(5000),
             initialValue = 0.0
         )
+
+    // ==========================================
+    // Real-Time Cloud Firestore Payout Status Listener
+    // ==========================================
+    private val firestoreListenerTrigger = MutableStateFlow(0)
+    private val lastObservedCloudStatuses = mutableMapOf<String, String>()
+    private var hasReceivedInitialCloudSnapshot = false
+
+    fun retryFirestorePayoutListener() {
+        firestoreListenerTrigger.value += 1
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val firestorePayoutStreamState: StateFlow<FirestorePayoutStreamState> =
+        firestoreListenerTrigger
+            .flatMapLatest { trigger ->
+                val repo = firestoreRepository
+                if (repo == null) {
+                    flowOf(FirestorePayoutStreamState.Unavailable)
+                } else {
+                    repo.observeOwnerPayouts()
+                        .onEach { cloudRecords ->
+                            syncCloudPayoutRecordsToRoom(cloudRecords)
+                        }
+                        .map<List<FirestoreOwnerPayoutRecord>, FirestorePayoutStreamState> { cloudRecords ->
+                            val transitionBanner = if (hasReceivedInitialCloudSnapshot) {
+                                cloudRecords.firstNotNullOfOrNull { record ->
+                                    val prev = lastObservedCloudStatuses[record.payoutId]
+                                    val next = record.status.uppercase()
+                                    if (prev != null && !prev.equals(next, ignoreCase = true)) {
+                                        "${record.payoutId}: $prev → $next"
+                                    } else if (prev == null) {
+                                        "${record.payoutId}: $next"
+                                    } else {
+                                        null
+                                    }
+                                }
+                            } else {
+                                null
+                            }
+                            hasReceivedInitialCloudSnapshot = true
+                            lastObservedCloudStatuses.clear()
+                            cloudRecords.forEach { record ->
+                                lastObservedCloudStatuses[record.payoutId] = record.status.uppercase()
+                            }
+                            FirestorePayoutStreamState.Live(
+                                payouts = cloudRecords,
+                                lastEventEpochMs = System.currentTimeMillis(),
+                                latestStatusChange = transitionBanner
+                            )
+                        }
+                        .onStart {
+                            if (trigger > 0) {
+                                emit(FirestorePayoutStreamState.Connecting)
+                            }
+                        }
+                        .catch { error ->
+                            val firestoreError = generateSequence(error) { it.cause }
+                                .filterIsInstance<FirebaseFirestoreException>()
+                                .firstOrNull()
+                            if (firestoreError == null && error is CancellationException) throw error
+                            val rootError = firestoreError ?: error
+                            emit(
+                                FirestorePayoutStreamState.Error(
+                                    rootError.message ?: "Failed to monitor real-time payout status"
+                                )
+                            )
+                        }
+                }
+            }
+            .stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(5000L),
+                initialValue = if (firestoreRepository == null) {
+                    FirestorePayoutStreamState.Unavailable
+                } else {
+                    FirestorePayoutStreamState.Connecting
+                }
+            )
+
+    private suspend fun syncCloudPayoutRecordsToRoom(cloudRecords: List<FirestoreOwnerPayoutRecord>) {
+        for (cloud in cloudRecords) {
+            val payoutRef = cloud.payoutId.ifBlank { cloud.reference }.ifBlank { continue }
+            val normalizedStatus = cloud.status.uppercase()
+            val existing = repository.getPayoutWireByReference(payoutRef).first()
+            if (existing != null) {
+                if (!existing.status.equals(normalizedStatus, ignoreCase = true)) {
+                    repository.updatePayoutWire(existing.copy(status = normalizedStatus))
+                }
+            } else {
+                val fxRate = _liveRateMap.value[cloud.currency.uppercase()]
+                    ?: currencies.find { it.code.equals(cloud.currency, ignoreCase = true) }?.exchangeRate
+                    ?: 1.0
+                val grossUsd = if (fxRate > 0.0) cloud.amount / fxRate else cloud.amount
+                val feeUsd = if (fxRate > 0.0) cloud.fee / fxRate else cloud.fee
+                val netUsd = if (fxRate > 0.0) cloud.netAmount / fxRate else cloud.netAmount
+                val isSimulated = cloud.method.equals("IDEAL", ignoreCase = true) ||
+                    cloud.method.equals("SEPA_INSTANT", ignoreCase = true)
+                val createdMs = cloud.createdAt?.toDate()?.time ?: System.currentTimeMillis()
+                repository.insertPayoutWire(
+                    PayoutWireEntity(
+                        referenceCode = payoutRef,
+                        transactionType = if (isSimulated) "SIMULATED_BANK_WIRE" else "PROCESSED_PAYOUT",
+                        method = cloud.method,
+                        grossAmountUsd = grossUsd,
+                        feeUsd = feeUsd,
+                        netAmountUsd = netUsd,
+                        convertedAmount = cloud.amount,
+                        currencyCode = cloud.currency.ifBlank { "USD" },
+                        exchangeRate = fxRate,
+                        recipientName = cloud.recipientName,
+                        bankName = when (cloud.method.uppercase()) {
+                            "STRIPE_PAYOUT" -> "Stripe Connected Payout"
+                            "PAYPAL" -> "PayPal Express"
+                            else -> _payoutConfig.value.bankWire.bankName
+                        },
+                        ibanOrAccount = cloud.destinationSummary,
+                        swiftBic = when (cloud.method.uppercase()) {
+                            "STRIPE_PAYOUT" -> "STRIPE"
+                            "PAYPAL" -> "PAYPAL"
+                            else -> _payoutConfig.value.bankWire.swiftBic
+                        },
+                        country = _payoutConfig.value.bankWire.country,
+                        clearingRail = when (cloud.method.uppercase()) {
+                            "STRIPE_PAYOUT" -> "Stripe Live Payout"
+                            "PAYPAL" -> "PayPal Instant"
+                            "IDEAL", "SEPA_INSTANT" -> "iDEAL / SEPA Instant"
+                            else -> "SEPA Target2 / SWIFT"
+                        },
+                        status = normalizedStatus,
+                        isSimulatedWire = isSimulated,
+                        timestamp = createdMs,
+                        notes = "Synced in real time from Firestore ($normalizedStatus)"
+                    )
+                )
+            }
+        }
+    }
 
     suspend fun exportPayoutHistoryAsCsv(processedOnly: Boolean = true): String {
         val records = if (processedOnly) {
@@ -3560,14 +3807,411 @@ class GlobalMarketViewModel(
         }
     }
 
+    private val _stripeTerminalCheckoutState =
+        MutableStateFlow<StripeTerminalCheckoutState>(StripeTerminalCheckoutState.Idle)
+    val stripeTerminalCheckoutState: StateFlow<StripeTerminalCheckoutState> =
+        _stripeTerminalCheckoutState.asStateFlow()
+
+    val simulatedCheckoutCustomers: List<SimulatedCheckoutCustomer> =
+        StripePaymentSheetConfigFactory.defaultCustomers
+
+    private val _selectedSimulatedCustomer =
+        MutableStateFlow(StripePaymentSheetConfigFactory.defaultCustomers.first())
+    val selectedSimulatedCustomer: StateFlow<SimulatedCheckoutCustomer> =
+        _selectedSimulatedCustomer.asStateFlow()
+
+    private val _paymentSheetAllowsDelayedMethods = MutableStateFlow(true)
+    val paymentSheetAllowsDelayedMethods: StateFlow<Boolean> =
+        _paymentSheetAllowsDelayedMethods.asStateFlow()
+
+    private val _paymentSheetGooglePayEnabled = MutableStateFlow(true)
+    val paymentSheetGooglePayEnabled: StateFlow<Boolean> =
+        _paymentSheetGooglePayEnabled.asStateFlow()
+
+    private val _paymentSheetCollectFullAddress = MutableStateFlow(false)
+    val paymentSheetCollectFullAddress: StateFlow<Boolean> =
+        _paymentSheetCollectFullAddress.asStateFlow()
+
+    private val _paymentSheetAllowsShippingAddress = MutableStateFlow(false)
+    val paymentSheetAllowsShippingAddress: StateFlow<Boolean> =
+        _paymentSheetAllowsShippingAddress.asStateFlow()
+
+    private val _paymentSheetLayout =
+        MutableStateFlow(PaymentSheet.PaymentMethodLayout.Automatic)
+    val paymentSheetLayout: StateFlow<PaymentSheet.PaymentMethodLayout> =
+        _paymentSheetLayout.asStateFlow()
+
+    private val _paymentSheetSimulatedOutcome =
+        MutableStateFlow(SimulatedPaymentSheetOutcome.COMPLETED)
+    val paymentSheetSimulatedOutcome: StateFlow<SimulatedPaymentSheetOutcome> =
+        _paymentSheetSimulatedOutcome.asStateFlow()
+
+    private val _paymentSheetLiveClientSecret = MutableStateFlow("")
+    val paymentSheetLiveClientSecret: StateFlow<String> =
+        _paymentSheetLiveClientSecret.asStateFlow()
+
+    private val _preparedPaymentSheetConfig =
+        MutableStateFlow<StripePaymentSheetPreparedConfig?>(null)
+    val preparedPaymentSheetConfig: StateFlow<StripePaymentSheetPreparedConfig?> =
+        _preparedPaymentSheetConfig.asStateFlow()
+
+    fun getStripeSdkEnvironmentBadge(): String = stripeTerminalProcessor.sdkEnvironmentBadge()
+
+    fun getStripePublishableKeyHint(): String = stripeTerminalProcessor.maskedPublishableKeyHint()
+
+    fun initializeStripeTerminalSdk(context: Context): String {
+        val key = stripeTerminalProcessor.ensurePaymentConfigurationInitialized(context)
+        if (_preparedPaymentSheetConfig.value == null) {
+            preparePaymentSheetConfiguration(context)
+        }
+        return key
+    }
+
+    fun selectSimulatedCustomer(customer: SimulatedCheckoutCustomer) {
+        _selectedSimulatedCustomer.value = customer
+        if (!customer.isGuest) {
+            cardHolderName.value = customer.displayName
+            selectedCountry.value = customer.countryName
+            currencies.firstOrNull { it.code == customer.preferredCurrencyCode }?.let { currency ->
+                selectCurrency(currency)
+            }
+        }
+    }
+
+    fun setPaymentSheetAllowsDelayedMethods(enabled: Boolean) {
+        _paymentSheetAllowsDelayedMethods.value = enabled
+    }
+
+    fun setPaymentSheetGooglePayEnabled(enabled: Boolean) {
+        _paymentSheetGooglePayEnabled.value = enabled
+    }
+
+    fun setPaymentSheetCollectFullAddress(enabled: Boolean) {
+        _paymentSheetCollectFullAddress.value = enabled
+    }
+
+    fun setPaymentSheetAllowsShippingAddress(enabled: Boolean) {
+        _paymentSheetAllowsShippingAddress.value = enabled
+    }
+
+    fun setPaymentSheetLayout(layout: PaymentSheet.PaymentMethodLayout) {
+        _paymentSheetLayout.value = layout
+    }
+
+    fun setPaymentSheetSimulatedOutcome(outcome: SimulatedPaymentSheetOutcome) {
+        _paymentSheetSimulatedOutcome.value = outcome
+    }
+
+    fun setPaymentSheetLiveClientSecret(secret: String) {
+        _paymentSheetLiveClientSecret.value = secret
+    }
+
+    fun buildCurrentPaymentSheetRequest(): StripePaymentSheetSetupRequest {
+        val curr = _selectedCurrency.value
+        val usd = _amountUsd.value.toDoubleOrNull()?.takeIf { it > 0.0 } ?: 49.99
+        val rate = _liveRateMap.value[curr.code] ?: curr.exchangeRate
+        val localized = usd * rate
+        val customer = _selectedSimulatedCustomer.value
+        val rail = _selectedPaymentRail.value ?: getPaymentRailsForCurrency(curr.code).first()
+        return StripePaymentSheetSetupRequest(
+            merchantDisplayName = "GlobalMarket Pro",
+            amountUsd = usd,
+            currencyCode = curr.code,
+            exchangeRate = rate,
+            localizedAmountMajor = localized,
+            customerProfile = customer,
+            overrideCustomerName = cardHolderName.value.ifBlank { null },
+            overrideCustomerEmail = customer.email.ifBlank { null },
+            overrideCountryName = selectedCountry.value.ifBlank { null },
+            allowsDelayedPaymentMethods = _paymentSheetAllowsDelayedMethods.value,
+            allowsShippingAddress = _paymentSheetAllowsShippingAddress.value,
+            enableGooglePay = _paymentSheetGooglePayEnabled.value,
+            collectFullAddress = _paymentSheetCollectFullAddress.value,
+            paymentMethodLayout = _paymentSheetLayout.value,
+            customClientSecret = _paymentSheetLiveClientSecret.value,
+            preferredRailId = rail.id
+        )
+    }
+
+    fun preparePaymentSheetConfiguration(context: Context?): StripePaymentSheetPreparedConfig {
+        val request = buildCurrentPaymentSheetRequest()
+        val prepared = StripePaymentSheetConfigFactory.buildPreparedConfig(
+            context = context,
+            processor = stripeTerminalProcessor,
+            request = request
+        )
+        _preparedPaymentSheetConfig.value = prepared
+        return prepared
+    }
+
+    fun runSimulatedPaymentSheetCheckout(
+        context: Context?,
+        simulateNetworkDelayMs: Long = 220L
+    ) {
+        viewModelScope.launch {
+            _stripeTerminalCheckoutState.value = StripeTerminalCheckoutState.ValidatingInput
+            val request = buildCurrentPaymentSheetRequest()
+            val prepared = StripePaymentSheetConfigFactory.buildPreparedConfig(
+                context = context,
+                processor = stripeTerminalProcessor,
+                request = request
+            )
+            _preparedPaymentSheetConfig.value = prepared
+
+            _stripeTerminalCheckoutState.value = StripeTerminalCheckoutState.TokenizingWithStripeSdk(
+                railLabel = "PaymentSheet (${prepared.customerId ?: "Guest"})",
+                currencyCode = prepared.currencyCode
+            )
+            if (simulateNetworkDelayMs > 0L) {
+                delay(simulateNetworkDelayMs)
+            }
+
+            val step = StripePaymentSheetConfigFactory.simulateCustomerCheckout(
+                request = request,
+                prepared = prepared,
+                outcome = _paymentSheetSimulatedOutcome.value
+            )
+            applyPaymentSheetExecutionStep(step, simulateNetworkDelayMs)
+        }
+    }
+
+    fun onNativePaymentSheetResult(
+        result: PaymentSheetResult,
+        simulateNetworkDelayMs: Long = 0L
+    ) {
+        val request = buildCurrentPaymentSheetRequest()
+        val prepared = _preparedPaymentSheetConfig.value
+            ?: StripePaymentSheetConfigFactory.buildPreparedConfig(
+                context = null,
+                processor = stripeTerminalProcessor,
+                request = request
+            )
+        viewModelScope.launch {
+            val step = StripePaymentSheetConfigFactory.mapPaymentSheetResultToStep(
+                result = result,
+                request = request,
+                prepared = prepared
+            )
+            applyPaymentSheetExecutionStep(step, simulateNetworkDelayMs)
+        }
+    }
+
+    private suspend fun applyPaymentSheetExecutionStep(
+        step: StripeTerminalExecutionStep,
+        simulateNetworkDelayMs: Long
+    ) {
+        when (step) {
+            is StripeTerminalExecutionStep.Requires3dsAuthentication -> {
+                _stripeTerminalCheckoutState.value = StripeTerminalCheckoutState.Requires3dsAction(
+                    challenge = step.challenge
+                )
+            }
+            is StripeTerminalExecutionStep.Settled -> {
+                _stripeTerminalCheckoutState.value = StripeTerminalCheckoutState.ConfirmingPaymentIntent(
+                    paymentIntentId = step.receipt.paymentIntentId
+                )
+                if (simulateNetworkDelayMs > 0L) {
+                    delay(simulateNetworkDelayMs / 2)
+                }
+                persistStripeTerminalReceipt(step.receipt)
+                clearTransientCardInputs()
+                _isSubscribed.value = true
+                _stripeTerminalCheckoutState.value = StripeTerminalCheckoutState.Succeeded(step.receipt)
+            }
+            is StripeTerminalExecutionStep.Declined -> {
+                _stripeTerminalCheckoutState.value = StripeTerminalCheckoutState.Failed(
+                    errorCode = step.errorCode,
+                    message = step.message,
+                    isRetryable = step.isRetryable
+                )
+            }
+        }
+    }
+
     fun openCheckout() {
         _isCheckoutVisible.value = true
         _paymentSuccess.value = false
         _isProcessing.value = false
+        _stripeTerminalCheckoutState.value = StripeTerminalCheckoutState.Idle
     }
 
     fun closeCheckout() {
         _isCheckoutVisible.value = false
+        clearTransientCardInputs()
+        _stripeTerminalCheckoutState.value = StripeTerminalCheckoutState.Idle
+    }
+
+    fun resetStripeTerminalCheckout() {
+        clearTransientCardInputs()
+        _stripeTerminalCheckoutState.value = StripeTerminalCheckoutState.Idle
+    }
+
+    private fun clearTransientCardInputs() {
+        cardNumber.value = ""
+        expiryDate.value = ""
+        cvv.value = ""
+    }
+
+    fun startStripeTerminalPayment(
+        context: Context?,
+        request: StripeTerminalPaymentRequest,
+        simulateNetworkDelayMs: Long = 260L
+    ) {
+        viewModelScope.launch {
+            _stripeTerminalCheckoutState.value = StripeTerminalCheckoutState.ValidatingInput
+            val prepared = stripeTerminalProcessor.prepareStripeSdkParams(context, request)
+            if (prepared is StripeSdkPreparationOutcome.ValidationFailed) {
+                _stripeTerminalCheckoutState.value = StripeTerminalCheckoutState.Failed(
+                    errorCode = prepared.errorCode,
+                    message = prepared.message,
+                    isRetryable = true
+                )
+                return@launch
+            }
+
+            val readyParams = prepared as StripeSdkPreparationOutcome.Ready
+            _stripeTerminalCheckoutState.value = StripeTerminalCheckoutState.TokenizingWithStripeSdk(
+                railLabel = request.railName,
+                currencyCode = request.targetCurrencyCode
+            )
+            if (simulateNetworkDelayMs > 0L) {
+                delay(simulateNetworkDelayMs)
+            }
+
+            when (val step = stripeTerminalProcessor.executeLocalizedSimulation(request, readyParams)) {
+                is StripeTerminalExecutionStep.Requires3dsAuthentication -> {
+                    clearTransientCardInputs()
+                    _stripeTerminalCheckoutState.value = StripeTerminalCheckoutState.Requires3dsAction(
+                        challenge = step.challenge
+                    )
+                }
+                is StripeTerminalExecutionStep.Settled -> {
+                    _stripeTerminalCheckoutState.value = StripeTerminalCheckoutState.ConfirmingPaymentIntent(
+                        paymentIntentId = step.receipt.paymentIntentId
+                    )
+                    if (simulateNetworkDelayMs > 0L) {
+                        delay(simulateNetworkDelayMs / 2)
+                    }
+                    persistStripeTerminalReceipt(step.receipt)
+                    clearTransientCardInputs()
+                    _isSubscribed.value = true
+                    _stripeTerminalCheckoutState.value = StripeTerminalCheckoutState.Succeeded(step.receipt)
+                }
+                is StripeTerminalExecutionStep.Declined -> {
+                    _stripeTerminalCheckoutState.value = StripeTerminalCheckoutState.Failed(
+                        errorCode = step.errorCode,
+                        message = step.message,
+                        isRetryable = step.isRetryable
+                    )
+                }
+            }
+        }
+    }
+
+    fun completeSimulated3dsChallenge(simulateNetworkDelayMs: Long = 240L) {
+        val currentState = _stripeTerminalCheckoutState.value
+        val challenge = (currentState as? StripeTerminalCheckoutState.Requires3dsAction)?.challenge ?: return
+
+        viewModelScope.launch {
+            _stripeTerminalCheckoutState.value = StripeTerminalCheckoutState.ConfirmingPaymentIntent(
+                paymentIntentId = challenge.paymentIntentId
+            )
+            if (simulateNetworkDelayMs > 0L) {
+                delay(simulateNetworkDelayMs)
+            }
+            val receipt = stripeTerminalProcessor.complete3dsChallenge(challenge)
+            persistStripeTerminalReceipt(receipt)
+            clearTransientCardInputs()
+            _isSubscribed.value = true
+            _stripeTerminalCheckoutState.value = StripeTerminalCheckoutState.Succeeded(receipt)
+        }
+    }
+
+    fun cancelOrFailSimulated3dsChallenge(cancelledByUser: Boolean = true) {
+        val currentState = _stripeTerminalCheckoutState.value
+        if (currentState !is StripeTerminalCheckoutState.Requires3dsAction) return
+        clearTransientCardInputs()
+        _stripeTerminalCheckoutState.value = StripeTerminalCheckoutState.Failed(
+            errorCode = if (cancelledByUser) "authentication_canceled" else "authentication_failed",
+            message = if (cancelledByUser) {
+                "3DS2 / SCA verification was canceled before authorization. No funds were captured."
+            } else {
+                "Strong Customer Authentication failed during issuer verification."
+            },
+            isRetryable = true
+        )
+    }
+
+    private suspend fun persistStripeTerminalReceipt(receipt: StripeTerminalReceipt) {
+        val paymentMethodTag = if (receipt.stripeMethodCode == "card") "CARD" else receipt.stripeMethodCode.uppercase(java.util.Locale.US)
+        val safeMaskedToken = "${receipt.cardBrand} •••• ${receipt.last4}"
+
+        val txEntity = TransactionEntity(
+            amountInUsd = receipt.amountUsd,
+            targetCurrency = receipt.currencyCode,
+            convertedAmount = receipt.localizedAmountMajor,
+            customerName = receipt.customerName,
+            country = receipt.countryName,
+            timestamp = receipt.settledAtMs,
+            stripeSubscriptionId = receipt.paymentIntentId
+        )
+        val logEntity = TransactionLogEntity(
+            logType = "PAYMENT",
+            title = "Stripe SDK ${receipt.railName} (${receipt.currencyCode})",
+            barcodeOrRawValue = "STRIPE_SDK:${receipt.currencyCode}:${receipt.minorUnits}:${receipt.paymentMethodId}",
+            barcodeFormat = "STRIPE_SDK",
+            amount = receipt.localizedAmountMajor,
+            currencyCode = receipt.currencyCode,
+            amountInUsd = receipt.amountUsd,
+            customerOrRecipient = receipt.customerName,
+            country = receipt.countryName,
+            paymentMethod = paymentMethodTag,
+            status = "SETTLED",
+            referenceCode = receipt.referenceCode,
+            timestamp = receipt.settledAtMs,
+            notes = "PI ${receipt.paymentIntentId} | PM ${receipt.paymentMethodId} | $safeMaskedToken | ${receipt.scaStatus} | Minor ${receipt.minorUnits}"
+        )
+        val salesEntity = SalesTransactionEntity(
+            transactionReference = receipt.paymentIntentId,
+            timestamp = receipt.settledAtMs,
+            customerName = receipt.customerName,
+            subtotalAmount = receipt.localizedAmountMajor,
+            totalAmount = receipt.localizedAmountMajor,
+            currency = receipt.currencyCode,
+            amountInUsd = receipt.amountUsd,
+            exchangeRate = receipt.exchangeRate,
+            paymentMethod = paymentMethodTag,
+            paymentStatus = "COMPLETED",
+            terminalId = receipt.terminalId,
+            cashierName = _userProfile.value.name,
+            itemCount = 1,
+            itemsSummary = "${receipt.itemsSummary} ($safeMaskedToken)",
+            receiptNumber = receipt.referenceCode,
+            notes = "Stripe SDK (${receipt.stripeMethodCode}) | ${receipt.scaStatus} | Idempotency ${receipt.idempotencyKey.take(8)}"
+        )
+        val terminalLog = TerminalTransactionLogEntity(
+            terminalId = receipt.terminalId,
+            transactionType = "SALE",
+            productName = receipt.itemsSummary,
+            productSku = "STRIPE-${receipt.currencyCode}",
+            quantity = 1,
+            unitPrice = receipt.localizedAmountMajor,
+            totalAmount = receipt.localizedAmountMajor,
+            currencyCode = receipt.currencyCode,
+            amountInUsd = receipt.amountUsd,
+            paymentMethod = paymentMethodTag,
+            paymentRail = receipt.railName,
+            customerName = receipt.customerName,
+            status = "COMPLETED",
+            referenceCode = receipt.referenceCode,
+            timestamp = receipt.settledAtMs,
+            notes = "Stripe PI ${receipt.paymentIntentId} | $safeMaskedToken | ${receipt.scaStatus}"
+        )
+
+        repository.insert(txEntity)
+        repository.insertLog(logEntity)
+        repository.insertSalesTransaction(salesEntity)
+        repository.insertTerminalLog(terminalLog)
     }
 
     fun openQrPayment() {

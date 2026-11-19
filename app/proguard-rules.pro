@@ -102,3 +102,12 @@
     kotlinx.coroutines.CoroutineExceptionHandler SERVICE;
 }
 -dontwarn kotlinx.coroutines.**
+
+# ==========================================
+# Stripe Android SDK (PaymentConfiguration, PaymentMethodCreateParams, 3DS2)
+# ==========================================
+-keep class com.stripe.android.** { *; }
+-keepclassmembers class com.stripe.android.** { *; }
+-dontwarn com.stripe.android.**
+-keep class com.example.data.Stripe* { *; }
+

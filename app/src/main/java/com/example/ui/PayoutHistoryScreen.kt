@@ -140,6 +140,7 @@ fun PayoutHistoryScreen(
     val totalCount by viewModel.totalPayoutWireCount.collectAsStateWithLifecycle()
     val totalNetUsdFromDb by viewModel.totalPayoutWireNetDisbursedUsd.collectAsStateWithLifecycle()
     val selectedLanguage by viewModel.selectedLanguage.collectAsStateWithLifecycle()
+    val firestorePayoutStreamState by viewModel.firestorePayoutStreamState.collectAsStateWithLifecycle()
 
     val currencyFormatter = remember(context, selectedLanguage) {
         CurrencyFormatter.from(context, selectedLanguage)
@@ -172,7 +173,8 @@ fun PayoutHistoryScreen(
     val completedCount = remember(allPayoutWires) {
         allPayoutWires.count {
             it.status.equals("COMPLETED", ignoreCase = true) ||
-                it.status.equals("SETTLED", ignoreCase = true)
+                it.status.equals("SETTLED", ignoreCase = true) ||
+                it.status.equals("PAID", ignoreCase = true)
         }
     }
     val distinctRails = remember(allPayoutWires) {
@@ -227,83 +229,90 @@ fun PayoutHistoryScreen(
                 .widthIn(max = 600.dp)
                 .padding(horizontal = 16.dp)
                 .testTag("payout_history_lazy_column"),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
-            contentPadding = PaddingValues(top = 12.dp, bottom = 32.dp)
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+            contentPadding = PaddingValues(top = 10.dp, bottom = 32.dp)
         ) {
-            // 1. TOP BAR
+            // 1. TOP BAR + REAL-TIME FIRESTORE SYNC STATUS STRIP
             item {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(
-                        modifier = Modifier.weight(1f),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        if (onBack != null) {
-                            IconButton(
-                                onClick = onBack,
-                                modifier = Modifier
-                                    .minimumInteractiveComponentSize()
-                                    .size(44.dp)
-                                    .clip(CircleShape)
-                                    .background(CleanSurfaceVariant)
-                                    .border(BorderStroke(1.dp, CleanBorder), CircleShape)
-                                    .testTag("payout_history_back_button")
-                            ) {
-                                Icon(
-                                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                                    contentDescription = "Back",
-                                    tint = CleanPrimary,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-                        }
-
-                        Column {
-                            Text(
-                                text = "Payout History Ledger",
-                                fontSize = 20.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = CleanTextPrimary,
-                                letterSpacing = (-0.4).sp
-                            )
-                            Text(
-                                text = "Room Database • Payouts & Simulated Bank Wires",
-                                fontSize = 12.sp,
-                                color = CleanTextSecondary,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                    }
-
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        if (allPayoutWires.isNotEmpty()) {
-                            IconButton(
-                                onClick = { showExportDialog = true },
-                                modifier = Modifier
-                                    .minimumInteractiveComponentSize()
-                                    .size(44.dp)
-                                    .clip(CircleShape)
-                                    .background(CleanPrimaryContainer)
-                                    .border(BorderStroke(1.dp, CleanBorder), CircleShape)
-                                    .testTag("payout_history_copy_csv_button")
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.ContentCopy,
-                                    contentDescription = "Export Payout History as CSV or JSON",
-                                    tint = CleanPrimary,
-                                    modifier = Modifier.size(18.dp)
+                        Row(
+                            modifier = Modifier.weight(1f),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            if (onBack != null) {
+                                IconButton(
+                                    onClick = onBack,
+                                    modifier = Modifier
+                                        .minimumInteractiveComponentSize()
+                                        .size(44.dp)
+                                        .clip(CircleShape)
+                                        .background(CleanSurfaceVariant)
+                                        .border(BorderStroke(1.dp, CleanBorder), CircleShape)
+                                        .testTag("payout_history_back_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                        contentDescription = "Back",
+                                        tint = CleanPrimary,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+
+                            Column {
+                                Text(
+                                    text = "Payout History Ledger",
+                                    fontSize = 20.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = CleanTextPrimary,
+                                    letterSpacing = (-0.4).sp
+                                )
+                                Text(
+                                    text = "Room Database • Payouts & Simulated Bank Wires",
+                                    fontSize = 12.sp,
+                                    color = CleanTextSecondary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             }
                         }
+
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            if (allPayoutWires.isNotEmpty()) {
+                                IconButton(
+                                    onClick = { showExportDialog = true },
+                                    modifier = Modifier
+                                        .minimumInteractiveComponentSize()
+                                        .size(44.dp)
+                                        .clip(CircleShape)
+                                        .background(CleanPrimaryContainer)
+                                        .border(BorderStroke(1.dp, CleanBorder), CircleShape)
+                                        .testTag("payout_history_copy_csv_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.ContentCopy,
+                                        contentDescription = "Export Payout History as CSV or JSON",
+                                        tint = CleanPrimary,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+                        }
                     }
+
+                    FirestoreLiveSyncBadgeStrip(
+                        streamState = firestorePayoutStreamState,
+                        onRetry = { viewModel.retryFirestorePayoutListener() }
+                    )
                 }
             }
 
@@ -995,26 +1004,7 @@ private fun PayoutHistoryItemCard(
                     modifier = Modifier.weight(1f)
                 )
 
-                Surface(
-                    shape = RoundedCornerShape(6.dp),
-                    color = when (record.status.uppercase()) {
-                        "COMPLETED", "SETTLED" -> CleanSuccessContainer
-                        "FAILED" -> CleanDangerContainer
-                        else -> CleanTertiaryContainer
-                    }
-                ) {
-                    Text(
-                        text = record.status,
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = when (record.status.uppercase()) {
-                            "COMPLETED", "SETTLED" -> CleanSuccess
-                            "FAILED" -> CleanDanger
-                            else -> CleanTertiary
-                        },
-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                    )
-                }
+                PayoutStatusPill(status = record.status)
             }
         }
     }

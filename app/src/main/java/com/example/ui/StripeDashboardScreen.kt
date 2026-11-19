@@ -134,6 +134,7 @@ fun StripeDashboardScreen(
     val stripeState by viewModel.stripePayoutState.collectAsStateWithLifecycle()
     val selectedCurrency by viewModel.selectedCurrency.collectAsStateWithLifecycle()
     val payoutWireHistory by viewModel.payoutWireHistory.collectAsStateWithLifecycle()
+    val firestorePayoutStreamState by viewModel.firestorePayoutStreamState.collectAsStateWithLifecycle()
     val currencyFormatter = remember { CurrencyFormatter.DEFAULT }
 
     var payoutAmountInput by remember { mutableStateOf("250.00") }
@@ -254,6 +255,14 @@ fun StripeDashboardScreen(
                     )
                 }
             }
+        }
+
+        // 1B. REAL-TIME FIRESTORE PAYOUT SYNC STATUS
+        item {
+            FirestoreLiveSyncBadgeStrip(
+                streamState = firestorePayoutStreamState,
+                onRetry = { viewModel.retryFirestorePayoutListener() }
+            )
         }
 
         // 2. HERO STRIPE TREASURY & ACCOUNT CARD
@@ -1036,26 +1045,7 @@ private fun StripeDashboardRemotePayoutCard(
                         fontWeight = FontWeight.ExtraBold,
                         color = CleanTextPrimary
                     )
-                    Surface(
-                        shape = RoundedCornerShape(6.dp),
-                        color = when (item.status.lowercase(Locale.US)) {
-                            "paid" -> CleanSuccessContainer
-                            "canceled", "failed" -> CleanDangerContainer
-                            else -> CleanTertiaryContainer
-                        }
-                    ) {
-                        Text(
-                            text = item.status.uppercase(Locale.US),
-                            fontSize = 8.sp,
-                            fontWeight = FontWeight.ExtraBold,
-                            color = when (item.status.lowercase(Locale.US)) {
-                                "paid" -> CleanSuccess
-                                "canceled", "failed" -> CleanDanger
-                                else -> CleanTertiary
-                            },
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                        )
-                    }
+                    PayoutStatusPill(status = item.status)
                 }
 
                 if (item.status.equals("pending", ignoreCase = true)) {
@@ -1118,12 +1108,18 @@ private fun StripeRoomSnapshotRow(
                     color = CleanTextSecondary
                 )
             }
-            Text(
-                text = currencyFormatter.formatUsd(record.netAmountUsd),
-                fontSize = 13.sp,
-                fontWeight = FontWeight.ExtraBold,
-                color = StripeIndigo
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                PayoutStatusPill(status = record.status)
+                Text(
+                    text = currencyFormatter.formatUsd(record.netAmountUsd),
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = StripeIndigo
+                )
+            }
         }
     }
 }

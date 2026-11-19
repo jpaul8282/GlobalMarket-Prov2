@@ -790,7 +790,7 @@ fun LocalizedPaymentSimulator(
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
-                        text = "Checkout",
+                        text = "Stripe Pay",
                         fontWeight = FontWeight.Bold,
                         fontSize = 12.sp
                     )

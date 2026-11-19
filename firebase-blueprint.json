@@ -24,7 +24,7 @@
       "type": "object",
       "properties": {
         "userId": { "type": "string", "description": "Authenticated store owner ID" },
-        "selectedMethod": { "type": "string", "enum": ["BANK_WIRE", "PAYPAL"], "description": "Active payout rail" },
+        "selectedMethod": { "type": "string", "enum": ["BANK_WIRE", "PAYPAL", "STRIPE_PAYOUT"], "description": "Active payout rail" },
         "bankName": { "type": "string", "description": "Bank organization name" },
         "accountHolderName": { "type": "string", "description": "Name on bank wire account" },
         "accountNumberOrIban": { "type": "string", "description": "IBAN or account number" },
@@ -47,16 +47,17 @@
       "properties": {
         "userId": { "type": "string", "description": "Owner UID who initiated disbursement" },
         "payoutId": { "type": "string", "description": "Unique UUID/ID for payout" },
-        "method": { "type": "string", "enum": ["BANK_WIRE", "PAYPAL"], "description": "Payout rail used" },
+        "method": { "type": "string", "enum": ["BANK_WIRE", "PAYPAL", "STRIPE_PAYOUT", "IDEAL", "SEPA_INSTANT"], "description": "Payout rail used" },
         "amount": { "type": "number", "description": "Gross payout amount" },
         "fee": { "type": "number", "description": "Disbursement rail fee" },
         "netAmount": { "type": "number", "description": "Net disbursed amount after rail fees" },
         "currency": { "type": "string", "description": "Currency code" },
         "recipientName": { "type": "string", "description": "Target recipient name" },
-        "destinationSummary": { "type": "string", "description": "Masked IBAN or PayPal email" },
-        "reference": { "type": "string", "description": "Wire SWIFT reference or PayPal TX ID" },
-        "status": { "type": "string", "enum": ["PENDING", "PROCESSING", "COMPLETED", "SETTLED"], "description": "Settlement lifecycle state" },
-        "createdAt": { "type": "string", "format": "date-time", "description": "Disbursement timestamp via serverTimestamp()" }
+        "destinationSummary": { "type": "string", "description": "Masked IBAN, PayPal email, or Stripe destination" },
+        "reference": { "type": "string", "description": "Wire SWIFT reference, PayPal TX ID, or Stripe Payout ID" },
+        "status": { "type": "string", "enum": ["PENDING", "PROCESSING", "IN_TRANSIT", "COMPLETED", "SETTLED", "PAID", "FAILED", "CANCELED"], "description": "Real-time settlement lifecycle state" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Disbursement timestamp via serverTimestamp()" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Last status update timestamp via serverTimestamp()" }
       },
       "required": ["userId", "payoutId", "method", "amount", "fee", "netAmount", "currency", "recipientName", "reference", "status", "createdAt"]
     },

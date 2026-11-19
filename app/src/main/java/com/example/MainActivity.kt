@@ -62,9 +62,13 @@ import com.example.ui.AppLanguage
 import com.example.ui.AuthScreen
 import com.example.ui.attemptAutoSignIn
 import com.example.ui.signOutUser
+import androidx.compose.runtime.withFrameNanos
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.firestore.FirebaseFirestore
 import androidx.credentials.CredentialManager
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import com.example.ui.BarcodeScannerModal
 import com.example.ui.CurrencyInfo
 import com.example.ui.GlabaWebCheckoutModal
@@ -80,91 +84,147 @@ import com.example.ui.PayoutMethodType
 import com.example.ui.QrPaymentDialog
 import com.example.ui.RealTimeCurrencyConversionTool
 import com.example.ui.RealTimeCurrencyConverterModal
+import com.example.ui.SalesVolume30DayChart
 import com.example.ui.SecurityThreatDefenseModal
 import com.example.ui.StripeDashboardScreen
+import com.example.ui.StripeTerminalCheckoutModal
 import com.example.ui.TransactionSummaryScreen
 import com.example.ui.UserProfile
 import com.example.ui.theme.*
+import com.example.util.CurrencyFormatter
 import com.example.util.CurrencyUtils
 import java.text.SimpleDateFormat
 import java.util.*
 
+private data class AppBootstrapDependencies(
+    val repository: TransactionRepository,
+    val firestoreRepository: FirestoreRepository?,
+    val firebaseAuth: FirebaseAuth
+)
+
 class MainActivity : ComponentActivity() {
     private var attachedViewModel: GlobalMarketViewModel? = null
+    private var pendingDeepLinkUri by mutableStateOf<Uri?>(null)
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
         intent.data?.let { uri ->
-            attachedViewModel?.handleDeepLink(uri)
+            val vm = attachedViewModel
+            if (vm != null) {
+                vm.handleDeepLink(uri)
+            } else {
+                pendingDeepLinkUri = uri
+            }
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        pendingDeepLinkUri = intent?.data
 
-        val database = AppDatabase.getDatabase(applicationContext)
-        val repository = TransactionRepository(
-            database.transactionDao(),
-            database.transactionLogDao(),
-            database.scannedProductDao(),
-            database.transactionHistoryDao(),
-            database.salesTerminalDao(),
-            database.inventoryProductDao(),
-            database.salesTransactionDao(),
-            database.payoutWireDao()
-        )
-
-        val firestoreDb = try {
-            FirebaseFirestore.getInstance(getString(R.string.firestore_database_id))
-        } catch (e: Exception) {
-            null
-        }
-        val firestoreRepository = firestoreDb?.let { FirestoreRepository(it) }
+        val appContext = applicationContext
+        val firestoreDbId = getString(R.string.firestore_database_id)
 
         setContent {
-            val firebaseAuth = remember { FirebaseAuth.getInstance() }
-            var currentUser by remember { mutableStateOf(firebaseAuth.currentUser) }
             val context = LocalContext.current
             val scope = rememberCoroutineScope()
-            val credentialManager = remember { CredentialManager.create(context) }
+            var bootstrap by remember { mutableStateOf<AppBootstrapDependencies?>(null) }
+            var currentUser by remember { mutableStateOf<FirebaseUser?>(null) }
 
-            DisposableEffect(Unit) {
-                val listener = FirebaseAuth.AuthStateListener { auth ->
-                    currentUser = auth.currentUser
+            // Commit the first frame immediately before running heavy Room/Firebase/CredentialManager IPC
+            LaunchedEffect(Unit) {
+                withFrameNanos { }
+                val loaded = withContext(Dispatchers.IO) {
+                    val database = AppDatabase.getDatabase(appContext)
+                    val repository = TransactionRepository(
+                        database.transactionDao(),
+                        database.transactionLogDao(),
+                        database.scannedProductDao(),
+                        database.transactionHistoryDao(),
+                        database.salesTerminalDao(),
+                        database.inventoryProductDao(),
+                        database.salesTransactionDao(),
+                        database.payoutWireDao()
+                    )
+                    val firestoreDb = try {
+                        FirebaseFirestore.getInstance(firestoreDbId)
+                    } catch (e: Exception) {
+                        null
+                    }
+                    val firestoreRepository = firestoreDb?.let { FirestoreRepository(it) }
+                    val auth = FirebaseAuth.getInstance()
+                    AppBootstrapDependencies(
+                        repository = repository,
+                        firestoreRepository = firestoreRepository,
+                        firebaseAuth = auth
+                    )
                 }
-                firebaseAuth.addAuthStateListener(listener)
-                onDispose {
-                    firebaseAuth.removeAuthStateListener(listener)
-                }
+                currentUser = loaded.firebaseAuth.currentUser
+                bootstrap = loaded
             }
 
-            LaunchedEffect(currentUser) {
-                if (currentUser == null) {
-                    attemptAutoSignIn(
-                        context = context,
-                        credentialManager = credentialManager,
-                        onAuthSuccess = { currentUser = firebaseAuth.currentUser },
-                        onUnauthenticated = {},
-                        scope = scope
-                    )
+            val activeBootstrap = bootstrap
+            if (activeBootstrap != null) {
+                DisposableEffect(activeBootstrap.firebaseAuth) {
+                    val listener = FirebaseAuth.AuthStateListener { auth ->
+                        currentUser = auth.currentUser
+                    }
+                    activeBootstrap.firebaseAuth.addAuthStateListener(listener)
+                    onDispose {
+                        activeBootstrap.firebaseAuth.removeAuthStateListener(listener)
+                    }
+                }
+
+                LaunchedEffect(activeBootstrap, currentUser) {
+                    if (currentUser == null) {
+                        withFrameNanos { }
+                        val credentialManager = withContext(Dispatchers.IO) {
+                            CredentialManager.create(context)
+                        }
+                        attemptAutoSignIn(
+                            context = context,
+                            credentialManager = credentialManager,
+                            onAuthSuccess = { currentUser = activeBootstrap.firebaseAuth.currentUser },
+                            onUnauthenticated = {},
+                            scope = scope
+                        )
+                    }
                 }
             }
 
             MyApplicationTheme {
-                if (currentUser == null) {
+                if (activeBootstrap == null) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(CleanBackground),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator(
+                            color = CleanPrimary,
+                            modifier = Modifier.size(36.dp),
+                            strokeWidth = 3.dp
+                        )
+                    }
+                } else if (currentUser == null) {
                     AuthScreen(
-                        onAuthSuccess = { currentUser = firebaseAuth.currentUser }
+                        onAuthSuccess = { currentUser = activeBootstrap.firebaseAuth.currentUser }
                     )
                 } else {
                     val uid = currentUser!!.uid
                     key(uid) {
                         val viewModel: GlobalMarketViewModel = viewModel(
                             key = uid,
-                            factory = GlobalMarketViewModelFactory(repository, firestoreRepository)
+                            factory = GlobalMarketViewModelFactory(
+                                activeBootstrap.repository,
+                                activeBootstrap.firestoreRepository
+                            )
                         )
-                        attachedViewModel = viewModel
+                        SideEffect {
+                            attachedViewModel = viewModel
+                        }
 
                         val selectedTab by viewModel.selectedTab.collectAsStateWithLifecycle()
                         val isShareModalOpen by viewModel.isShareModalOpen.collectAsStateWithLifecycle()
@@ -178,12 +238,14 @@ class MainActivity : ComponentActivity() {
                         val isStripeUiOpen by viewModel.isStripeUiOpen.collectAsStateWithLifecycle()
                         val isCurrencyConverterModalOpen by viewModel.isCurrencyConverterModalOpen.collectAsStateWithLifecycle()
                         val isSecurityDefenseModalOpen by viewModel.isSecurityDefenseModalOpen.collectAsStateWithLifecycle()
+                        val isCheckoutVisible by viewModel.isCheckoutVisible.collectAsStateWithLifecycle()
                         val deepLinkBanner by viewModel.deepLinkBanner.collectAsStateWithLifecycle()
 
                         // Handle incoming deep link when launched from external URL or intent
-                        LaunchedEffect(Unit) {
-                            intent?.data?.let { uri ->
+                        LaunchedEffect(pendingDeepLinkUri, viewModel) {
+                            pendingDeepLinkUri?.let { uri ->
                                 viewModel.handleDeepLink(uri)
+                                pendingDeepLinkUri = null
                             }
                         }
 
@@ -323,6 +385,13 @@ class MainActivity : ComponentActivity() {
                         PayoutDisbursementModal(
                             viewModel = viewModel,
                             onDismiss = { viewModel.closePayoutModal() }
+                        )
+                    }
+
+                    if (isCheckoutVisible) {
+                        StripeTerminalCheckoutModal(
+                            viewModel = viewModel,
+                            onDismiss = { viewModel.closeCheckout() }
                         )
                     }
 
@@ -505,9 +574,9 @@ fun GlobalMarketDashboard(
     val selectedLanguage by viewModel.selectedLanguage.collectAsStateWithLifecycle()
     val selectedCurrency by viewModel.selectedCurrency.collectAsStateWithLifecycle()
     val amountUsd by viewModel.amountUsd.collectAsStateWithLifecycle()
-    val isCheckoutVisible by viewModel.isCheckoutVisible.collectAsStateWithLifecycle()
     val isSubscribed by viewModel.isSubscribed.collectAsStateWithLifecycle()
     val transactions by viewModel.transactions.collectAsStateWithLifecycle()
+    val salesTransactions by viewModel.salesTransactions.collectAsStateWithLifecycle()
     val defaultCampaign = viewModel.marketingCampaigns.first()
 
     var isLanguageDropdownExpanded by remember { mutableStateOf(false) }
@@ -785,6 +854,17 @@ fun GlobalMarketDashboard(
                     }
                 }
             }
+        }
+
+        // 2A. 30-DAY TOTAL SALES VOLUME CHART (NATIVE COMPOSE VISUALIZATION)
+        item {
+            SalesVolume30DayChart(
+                transactions = transactions,
+                salesTransactions = salesTransactions,
+                currencyFormatter = CurrencyFormatter.DEFAULT,
+                onSeedSampleSales = { viewModel.seedSampleTransactions() },
+                onOpenFullAnalytics = { viewModel.selectTab(2) }
+            )
         }
 
         // 2B. STRIPE CONNECT & TREASURY QUICK ENTRY CARD
@@ -1641,10 +1721,6 @@ fun GlobalMarketDashboard(
                 }
             }
         }
-    }
-
-    if (isCheckoutVisible) {
-        CleanCheckoutModal(viewModel = viewModel)
     }
 }
 
@@ -3073,6 +3149,14 @@ fun CleanTransactionRow(
 // -------------------------------------------------------------
 @Composable
 fun CleanCheckoutModal(viewModel: GlobalMarketViewModel) {
+    StripeTerminalCheckoutModal(
+        viewModel = viewModel,
+        onDismiss = { viewModel.closeCheckout() }
+    )
+}
+
+@Composable
+private fun LegacyCleanCheckoutModalUnused(viewModel: GlobalMarketViewModel) {
     val selectedCurrency by viewModel.selectedCurrency.collectAsStateWithLifecycle()
     val amountUsd by viewModel.amountUsd.collectAsStateWithLifecycle()
     val isProcessing by viewModel.isProcessing.collectAsStateWithLifecycle()

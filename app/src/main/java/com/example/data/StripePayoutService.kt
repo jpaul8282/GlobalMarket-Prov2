@@ -325,17 +325,17 @@ class StripePayoutGateway(
     fun isConfigured(): Boolean = resolvedSecretKey() != null && !isPublishableKeyMistakenForSecret()
 
     fun isLiveKey(): Boolean = resolvedSecretKey()?.startsWith("sk_live_") == true ||
-        resolvedSecretKey()?.startsWith("rk_live_") == true ||
-        resolvedPublishableKey()?.startsWith("pk_live_") == true
+        resolvedSecretKey()?.startsWith("rk_live_") == true
 
     fun isRestrictedKey(): Boolean = resolvedSecretKey()?.startsWith("rk_") == true
 
     fun environmentLabel(): String {
         if (isPublishableKeyMistakenForSecret()) return "SECRET KEY INVALID"
-        val key = resolvedSecretKey() ?: resolvedPublishableKey() ?: return "API KEY REQUIRED"
+        val key = resolvedSecretKey()
+            ?: return if (isPublishableKeyConfigured()) "SECRET KEY REQUIRED" else "API KEY REQUIRED"
         return when {
-            key.startsWith("sk_live_") || key.startsWith("rk_live_") || key.startsWith("pk_live_") -> "LIVE MODE"
-            key.startsWith("sk_test_") || key.startsWith("rk_test_") || key.startsWith("pk_test_") -> "TEST MODE"
+            key.startsWith("sk_live_") || key.startsWith("rk_live_") -> "LIVE MODE"
+            key.startsWith("sk_test_") || key.startsWith("rk_test_") -> "TEST MODE"
             else -> "CUSTOM KEY"
         }
     }
@@ -492,11 +492,11 @@ class StripePayoutGateway(
         validateSecretKeyForRestCalls("execute live Stripe payouts")?.let { return it }
         val key = resolvedSecretKey()!!
 
-        if (majorAmount <= 0.0) {
+        if (!majorAmount.isFinite() || majorAmount <= 0.0) {
             return StripePayoutApiResult.ApiError(
                 httpCode = 400,
                 stripeErrorCode = "invalid_amount",
-                message = "Payout amount must be greater than zero."
+                message = "Payout amount must be a valid number greater than zero."
             )
         }
 
@@ -506,7 +506,8 @@ class StripePayoutGateway(
             "standard"
         }
         val minorUnits = toMinorUnits(majorAmount, currencyCode)
-        val descriptor = statementDescriptor?.trim()?.take(22)?.ifBlank { null }
+        val maxDescriptorLen = if (normalizedMethod == "instant") 10 else 22
+        val descriptor = statementDescriptor?.trim()?.take(maxDescriptorLen)?.ifBlank { null }
         val resolvedDestination = destinationId?.trim()?.ifBlank { null }
 
         return try {
@@ -535,6 +536,13 @@ class StripePayoutGateway(
 
     suspend fun cancelPayout(payoutId: String): StripePayoutApiResult<StripePayoutItem> {
         validateSecretKeyForRestCalls("cancel Stripe payouts")?.let { return it }
+        if (payoutId.isBlank()) {
+            return StripePayoutApiResult.ApiError(
+                httpCode = 400,
+                stripeErrorCode = "invalid_payout_id",
+                message = "A valid Stripe payout ID is required to cancel."
+            )
+        }
         val key = resolvedSecretKey()!!
 
         return try {
@@ -642,21 +650,30 @@ class StripePayoutGateway(
         }
         var stripeCode: String? = null
         var stripeMessage: String? = null
+        var stripeParam: String? = null
         if (!rawBody.isNullOrBlank()) {
             try {
                 val errObj = JSONObject(rawBody).optJSONObject("error")
                 if (errObj != null) {
                     stripeCode = errObj.optString("code").takeIf { it.isNotBlank() }
+                        ?: errObj.optString("type").takeIf { it.isNotBlank() }
                     stripeMessage = errObj.optString("message").takeIf { it.isNotBlank() }
+                    stripeParam = errObj.optString("param").takeIf { it.isNotBlank() }
                 }
             } catch (_: Exception) {
                 // Fallback to HTTP status message
             }
         }
+        val formattedMessage = buildString {
+            append(stripeMessage ?: "Stripe API HTTP $code: ${e.message()}")
+            if (!stripeParam.isNullOrBlank()) {
+                append(" (param: $stripeParam)")
+            }
+        }
         return StripePayoutApiResult.ApiError(
             httpCode = code,
             stripeErrorCode = stripeCode,
-            message = stripeMessage ?: "Stripe API HTTP $code: ${e.message()}"
+            message = formattedMessage
         )
     }
 }

@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -34,11 +35,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -75,8 +78,10 @@ import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential.Co
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.GoogleAuthProvider
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withContext
 
 fun onGoogleSignInClicked(
     context: Context,
@@ -192,15 +197,23 @@ fun GoogleSignInButton(
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
-    val credentialManager = remember { CredentialManager.create(context) }
+    var credentialManager by remember { mutableStateOf<CredentialManager?>(null) }
     var isLoading by remember { mutableStateOf(false) }
+
+    LaunchedEffect(context) {
+        withFrameNanos { }
+        credentialManager = withContext(Dispatchers.IO) {
+            CredentialManager.create(context)
+        }
+    }
 
     Button(
         onClick = {
             isLoading = true
+            val cm = credentialManager ?: CredentialManager.create(context).also { credentialManager = it }
             onGoogleSignInClicked(
                 context = context,
-                credentialManager = credentialManager,
+                credentialManager = cm,
                 onAuthSuccess = {
                     isLoading = false
                     onAuthSuccess()
@@ -255,6 +268,7 @@ fun AuthScreen(
         modifier = modifier
             .fillMaxSize()
             .background(CleanBackground)
+            .systemBarsPadding()
             .padding(24.dp),
         contentAlignment = Alignment.Center
     ) {
