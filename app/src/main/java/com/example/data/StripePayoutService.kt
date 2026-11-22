@@ -295,26 +295,30 @@ class StripePayoutGateway(
         private const val PLACEHOLDER_SECRET = "MY_STRIPE_SECRET_KEY"
         private const val PLACEHOLDER_ACCOUNT = "MY_STRIPE_CONNECTED_ACCOUNT_ID"
 
-        private val ZERO_DECIMAL_CURRENCIES = setOf(
-            "BIF", "CLP", "DJF", "GNF", "JPY", "KMF", "KRW", "MGA",
-            "PYG", "RWF", "UGX", "VND", "VUV", "XAF", "XOF", "XPF"
-        )
+        private val ZERO_DECIMAL_CURRENCIES = StripeCurrencyCatalog.ZERO_DECIMAL_CODES
+        private val THREE_DECIMAL_CURRENCIES = StripeCurrencyCatalog.THREE_DECIMAL_CODES
 
         fun toMinorUnits(majorAmount: Double, currencyCode: String): Long {
             val upper = currencyCode.uppercase(Locale.US)
-            return if (ZERO_DECIMAL_CURRENCIES.contains(upper)) {
-                majorAmount.roundToLong().coerceAtLeast(1L)
-            } else {
-                (majorAmount * 100.0).roundToLong().coerceAtLeast(1L)
+            return when {
+                ZERO_DECIMAL_CURRENCIES.contains(upper) ->
+                    majorAmount.roundToLong().coerceAtLeast(1L)
+                THREE_DECIMAL_CURRENCIES.contains(upper) ->
+                    (majorAmount * 1000.0).roundToLong().coerceAtLeast(1L)
+                else ->
+                    (majorAmount * 100.0).roundToLong().coerceAtLeast(1L)
             }
         }
 
         fun toMajorAmount(minorUnits: Long, currencyCode: String): Double {
             val upper = currencyCode.uppercase(Locale.US)
-            return if (ZERO_DECIMAL_CURRENCIES.contains(upper)) {
-                minorUnits.toDouble()
-            } else {
-                minorUnits / 100.0
+            return when {
+                ZERO_DECIMAL_CURRENCIES.contains(upper) ->
+                    minorUnits.toDouble()
+                THREE_DECIMAL_CURRENCIES.contains(upper) ->
+                    minorUnits / 1000.0
+                else ->
+                    minorUnits / 100.0
             }
         }
 

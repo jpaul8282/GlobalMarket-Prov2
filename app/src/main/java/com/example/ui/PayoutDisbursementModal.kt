@@ -809,29 +809,25 @@ fun PayoutDisbursementModal(
                                     }
                                 }
 
-                                if (stripePayoutState.externalAccounts.isNotEmpty()) {
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .horizontalScroll(rememberScrollState()),
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                    ) {
-                                        stripePayoutState.externalAccounts.forEach { ext ->
-                                            val isDest = stripePayoutState.selectedDestinationId == ext.id
-                                            FilterChip(
-                                                selected = isDest,
-                                                onClick = { viewModel.selectStripeDestination(ext.id) },
-                                                label = {
-                                                    Text(
-                                                        text = "${ext.label} ••••${ext.last4}",
-                                                        fontSize = 10.sp
-                                                    )
-                                                },
-                                                modifier = Modifier.testTag("modal_stripe_dest_${ext.id}")
-                                            )
+                                ExternalAccountsCurrencyCoinsSection(
+                                    externalAccounts = stripePayoutState.externalAccounts,
+                                    selectedDestinationId = stripePayoutState.selectedDestinationId,
+                                    selectedCurrencyCode = selectedPayoutCurrency.code,
+                                    onSelectDestination = { destId ->
+                                        viewModel.selectStripeDestination(destId)
+                                        stripePayoutState.externalAccounts.firstOrNull { it.id == destId }?.let {
+                                            selectedPayoutCurrency = viewModel.findAnyCurrencyInfo(it.currencyCode)
                                         }
-                                    }
-                                }
+                                    },
+                                    onSelectCurrencyCoin = { code ->
+                                        selectedPayoutCurrency = viewModel.findAnyCurrencyInfo(code)
+                                        viewModel.selectStripeExternalAccountCurrency(code)
+                                    },
+                                    scopeTag = "modal_stripe",
+                                    destinationTagPrefix = "modal_stripe_dest_",
+                                    includeAutoDestinationOption = false,
+                                    compact = true
+                                )
 
                                 OutlinedTextField(
                                     value = stripeDescription,
@@ -926,7 +922,12 @@ fun PayoutDisbursementModal(
                                         verticalAlignment = Alignment.CenterVertically,
                                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                                     ) {
-                                        Text(selectedPayoutCurrency.flagEmoji, fontSize = 18.sp)
+                                        CurrencyCoinEmblem(
+                                            currencyCode = selectedPayoutCurrency.code,
+                                            size = 22.dp,
+                                            selected = true
+                                        )
+                                        Text(selectedPayoutCurrency.flagEmoji, fontSize = 16.sp)
                                         Text(selectedPayoutCurrency.code, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = CleanTextPrimary)
                                     }
                                 }

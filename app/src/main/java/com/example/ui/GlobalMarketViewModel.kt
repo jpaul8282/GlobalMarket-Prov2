@@ -121,6 +121,7 @@ data class StripePayoutUiState(
     val isRestrictedKey: Boolean = false,
     val externalAccounts: List<StripeExternalAccount> = emptyList(),
     val selectedDestinationId: String? = null,
+    val selectedExternalAccountCurrencyCode: String = "EUR",
     val selectedSpeedMethod: String = "standard", // "standard" or "instant"
     val isLoadingBalance: Boolean = false,
     val isCheckingConnection: Boolean = false,
@@ -216,7 +217,8 @@ class GlobalMarketViewModel(
     private val repository: TransactionRepository,
     private val firestoreRepository: com.example.data.FirestoreRepository? = null,
     private val stripePayoutGateway: StripePayoutGateway = StripePayoutGateway(),
-    private val stripeTerminalProcessor: StripeTerminalPaymentProcessor = StripeTerminalPaymentProcessor()
+    private val stripeTerminalProcessor: StripeTerminalPaymentProcessor = StripeTerminalPaymentProcessor(),
+    private val currencyRepository: CurrencyRepository = StripeCurrencyRepository()
 ) : ViewModel() {
 
     // Localization Translations
@@ -681,6 +683,33 @@ class GlobalMarketViewModel(
         CurrencyInfo("MXN", "Mex$", 18.20, "https://flagcdn.com/w20/mx.png", "Mexico", "🇲🇽", "Americas")
     )
 
+    val allStripeCurrencyCoins: List<StripeCurrencyCoin> = StripeCurrencyCatalog.allStripeCurrencies
+    val supportedStripeCurrencies: List<Currency> = currencyRepository.getSupportedStripeCurrencies()
+
+    fun filterSimulatorCurrencies(
+        query: String = "",
+        regionFilter: String = "All"
+    ): List<Currency> = currencyRepository.filterCurrencies(query = query, regionFilter = regionFilter)
+
+    fun findAnyCurrencyInfo(currencyCode: String): CurrencyInfo {
+        val clean = currencyCode.trim().uppercase()
+        currencies.find { it.code.equals(clean, ignoreCase = true) }?.let { return it }
+        val coin = StripeCurrencyCatalog.findByCode(clean)
+        if (coin != null) {
+            val liveRate = _liveRateMap.value[coin.code] ?: coin.approximateUsdRate
+            return CurrencyInfo(
+                code = coin.code,
+                symbol = coin.symbol,
+                exchangeRate = liveRate,
+                flagUrl = "",
+                defaultCountry = coin.defaultCountry,
+                flagEmoji = coin.flagEmoji,
+                region = coin.region.displayName
+            )
+        }
+        return _selectedCurrency.value
+    }
+
     // Marketing Campaign Presets
     val marketingCampaigns = listOf(
         MarketingCampaign(
@@ -726,10 +755,15 @@ class GlobalMarketViewModel(
     private val _lastRateRefreshTimestamp = MutableStateFlow(System.currentTimeMillis())
     val lastRateRefreshTimestamp: StateFlow<Long> = _lastRateRefreshTimestamp.asStateFlow()
 
-    private val _liveRateMap = MutableStateFlow<Map<String, Double>>(currencies.associate { it.code to it.exchangeRate })
+    private val _liveRateMap = MutableStateFlow<Map<String, Double>>(
+        StripeCurrencyCatalog.allStripeCurrencies.associate { it.code to it.approximateUsdRate } +
+            currencies.associate { it.code to it.exchangeRate }
+    )
     val liveRateMap: StateFlow<Map<String, Double>> = _liveRateMap.asStateFlow()
 
-    private val _rateChangePercents = MutableStateFlow<Map<String, Double>>(currencies.associate { it.code to 0.0 })
+    private val _rateChangePercents = MutableStateFlow<Map<String, Double>>(
+        StripeCurrencyCatalog.allStripeCurrencies.associate { it.code to 0.0 }
+    )
     val rateChangePercents: StateFlow<Map<String, Double>> = _rateChangePercents.asStateFlow()
 
     private val _selectedPaymentRail = MutableStateFlow<LocalPaymentRail?>(null)
@@ -1875,9 +1909,26 @@ class GlobalMarketViewModel(
     }
 
     fun selectStripeDestination(destinationId: String?) {
+        val cleanId = destinationId?.takeIf { it.isNotBlank() }
+        val matchedExt = cleanId?.let { id ->
+            _stripePayoutState.value.externalAccounts.firstOrNull { it.id == id }
+        }
+        val nextCurrency = matchedExt?.currencyCode?.uppercase()
+            ?: _stripePayoutState.value.selectedExternalAccountCurrencyCode
         _stripePayoutState.value = _stripePayoutState.value.copy(
-            selectedDestinationId = destinationId?.takeIf { it.isNotBlank() }
+            selectedDestinationId = cleanId,
+            selectedExternalAccountCurrencyCode = nextCurrency
         )
+    }
+
+    fun selectStripeExternalAccountCurrency(currencyCode: String) {
+        val clean = currencyCode.trim().uppercase()
+        val coin = StripeCurrencyCatalog.findByCode(clean)
+        val resolvedCode = coin?.code ?: clean
+        _stripePayoutState.value = _stripePayoutState.value.copy(
+            selectedExternalAccountCurrencyCode = resolvedCode
+        )
+        selectCurrency(findAnyCurrencyInfo(resolvedCode))
     }
 
     fun calculatePayoutFee(method: PayoutMethodType, amountInUsd: Double): Double {
@@ -2211,7 +2262,7 @@ class GlobalMarketViewModel(
         destinationId: String? = _stripePayoutState.value.selectedDestinationId,
         description: String? = null
     ): StripePayoutApiResult<StripePayoutItem> {
-        val currency = currencies.find { it.code.equals(currencyCode, ignoreCase = true) } ?: _selectedCurrency.value
+        val currency = findAnyCurrencyInfo(currencyCode)
         val fxRate = _liveRateMap.value[currency.code] ?: currency.exchangeRate
         val targetMajorAmount = amountInUsd * fxRate
         val startedAtMs = System.currentTimeMillis()
@@ -3624,6 +3675,10 @@ class GlobalMarketViewModel(
         _simulatorBillingCountry.value = currency.defaultCountry
         val rails = getPaymentRailsForCurrency(currency.code)
         _selectedPaymentRail.value = rails.firstOrNull()
+    }
+
+    fun selectSimulatorCurrency(currency: Currency) {
+        selectCurrency(findAnyCurrencyInfo(currency.code))
     }
 
     fun selectPaymentRail(rail: LocalPaymentRail) {

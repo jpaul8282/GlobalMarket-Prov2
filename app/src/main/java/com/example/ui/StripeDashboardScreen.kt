@@ -147,6 +147,10 @@ fun StripeDashboardScreen(
         payoutWireHistory.filter { it.method.equals("STRIPE_PAYOUT", ignoreCase = true) }
     }
 
+    LaunchedEffect(stripeState.selectedExternalAccountCurrencyCode) {
+        payoutCurrency = viewModel.findAnyCurrencyInfo(stripeState.selectedExternalAccountCurrencyCode)
+    }
+
     LaunchedEffect(stripeState.isKeyConfigured) {
         if (stripeState.isKeyConfigured &&
             stripeState.lastSyncedEpochMs == null &&
@@ -578,8 +582,13 @@ fun StripeDashboardScreen(
                                 Row(
                                     modifier = Modifier.padding(horizontal = 12.dp),
                                     verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                                 ) {
+                                    CurrencyCoinEmblem(
+                                        currencyCode = payoutCurrency.code,
+                                        size = 22.dp,
+                                        selected = true
+                                    )
                                     Text(payoutCurrency.code, fontWeight = FontWeight.Bold, fontSize = 13.sp)
                                     Icon(Icons.Default.ArrowDropDown, contentDescription = "Select Currency", modifier = Modifier.size(18.dp))
                                 }
@@ -693,38 +702,26 @@ fun StripeDashboardScreen(
                         }
                     }
 
-                    // External Bank / Card Destinations
-                    if (stripeState.externalAccounts.isNotEmpty()) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .horizontalScroll(rememberScrollState()),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            stripeState.externalAccounts.forEach { ext ->
-                                val selected = stripeState.selectedDestinationId == ext.id
-                                FilterChip(
-                                    selected = selected,
-                                    onClick = { viewModel.selectStripeDestination(ext.id) },
-                                    leadingIcon = {
-                                        Icon(
-                                            imageVector = if (ext.type.equals("card", ignoreCase = true)) {
-                                                Icons.Default.CreditCard
-                                            } else {
-                                                Icons.Default.AccountBalance
-                                            },
-                                            contentDescription = null,
-                                            modifier = Modifier.size(14.dp)
-                                        )
-                                    },
-                                    label = {
-                                        Text("${ext.label} ••••${ext.last4} (${ext.currencyCode})", fontSize = 10.sp)
-                                    },
-                                    modifier = Modifier.testTag("stripe_ui_dest_${ext.id}")
-                                )
+                    // External Bank / Card Destinations & All Stripe Currency Coins (136+)
+                    ExternalAccountsCurrencyCoinsSection(
+                        externalAccounts = stripeState.externalAccounts,
+                        selectedDestinationId = stripeState.selectedDestinationId,
+                        selectedCurrencyCode = payoutCurrency.code,
+                        onSelectDestination = { destId ->
+                            viewModel.selectStripeDestination(destId)
+                            stripeState.externalAccounts.firstOrNull { it.id == destId }?.let {
+                                payoutCurrency = viewModel.findAnyCurrencyInfo(it.currencyCode)
                             }
-                        }
-                    }
+                        },
+                        onSelectCurrencyCoin = { code ->
+                            payoutCurrency = viewModel.findAnyCurrencyInfo(code)
+                            viewModel.selectStripeExternalAccountCurrency(code)
+                        },
+                        scopeTag = "stripe_ui",
+                        destinationTagPrefix = "stripe_ui_dest_",
+                        includeAutoDestinationOption = true,
+                        compact = false
+                    )
 
                     OutlinedTextField(
                         value = payoutDescription,

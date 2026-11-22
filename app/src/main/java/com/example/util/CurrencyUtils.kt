@@ -131,19 +131,30 @@ object CurrencyUtils {
         locale: Locale = Locale.getDefault()
     ): String {
         val cleanCode = currencyCode.trim().uppercase()
+        val catalogDecimals = com.example.data.StripeCurrencyCatalog.findByCode(cleanCode)?.decimalPlaces
         return try {
             val currency = Currency.getInstance(cleanCode)
+            val fractionDigits = catalogDecimals ?: currency.defaultFractionDigits
             val formatter = NumberFormat.getCurrencyInstance(locale).apply {
                 this.currency = currency
-                maximumFractionDigits = currency.defaultFractionDigits
-                minimumFractionDigits = currency.defaultFractionDigits
+                maximumFractionDigits = fractionDigits
+                minimumFractionDigits = fractionDigits
             }
             formatter.format(amount)
         } catch (e: Exception) {
             // Graceful fallback for custom or unrecognised currency tokens
             val symbol = getFallbackSymbol(cleanCode)
-            val decimalFormat = DecimalFormat("#,##0.00", DecimalFormatSymbols(locale))
-            if (symbol.isNotEmpty()) "$symbol${decimalFormat.format(amount)}" else "${decimalFormat.format(amount)} $cleanCode"
+            val pattern = when (catalogDecimals ?: 2) {
+                0 -> "#,##0"
+                3 -> "#,##0.000"
+                else -> "#,##0.00"
+            }
+            val decimalFormat = DecimalFormat(pattern, DecimalFormatSymbols(locale))
+            if (symbol.isNotEmpty() && symbol != cleanCode) {
+                "$symbol${decimalFormat.format(amount)}"
+            } else {
+                "${decimalFormat.format(amount)} $cleanCode"
+            }
         }
     }
 
@@ -183,7 +194,7 @@ object CurrencyUtils {
      */
     fun getCurrencySymbol(currencyCode: String, locale: Locale = Locale.getDefault()): String {
         val cleanCode = currencyCode.trim().uppercase()
-        return try {
+        return com.example.data.StripeCurrencyCatalog.findByCode(cleanCode)?.symbol ?: try {
             val currency = Currency.getInstance(cleanCode)
             currency.getSymbol(locale)
         } catch (e: Exception) {
@@ -195,7 +206,8 @@ object CurrencyUtils {
      * Fallback symbol for known or unregistered currencies.
      */
     fun getFallbackSymbol(currencyCode: String): String {
-        return when (currencyCode.trim().uppercase()) {
+        val clean = currencyCode.trim().uppercase()
+        return com.example.data.StripeCurrencyCatalog.findByCode(clean)?.symbol ?: when (clean) {
             "USD" -> "$"
             "EUR" -> "€"
             "GBP" -> "£"
@@ -204,16 +216,17 @@ object CurrencyUtils {
             "CAD" -> "CA$"
             "AUD" -> "A$"
             "CHF" -> "CHF"
-            else -> currencyCode
+            else -> clean
         }
     }
 
     /**
-     * Retrieves the standard number of fraction digits for a currency (e.g. JPY = 0, USD = 2).
+     * Retrieves the standard number of fraction digits for a currency (e.g. JPY = 0, USD = 2, KWD = 3).
      */
     fun getFractionDigits(currencyCode: String): Int {
-        return try {
-            Currency.getInstance(currencyCode.trim().uppercase()).defaultFractionDigits
+        val clean = currencyCode.trim().uppercase()
+        return com.example.data.StripeCurrencyCatalog.findByCode(clean)?.decimalPlaces ?: try {
+            Currency.getInstance(clean).defaultFractionDigits
         } catch (e: Exception) {
             2
         }

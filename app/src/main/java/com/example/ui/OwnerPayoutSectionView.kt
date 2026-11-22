@@ -1177,7 +1177,16 @@ fun OwnerPayoutSectionView(
                 onSelectSpeed = { speed -> viewModel.setStripePayoutSpeed(speed) },
                 onSyncStripe = { viewModel.refreshStripeBalanceAndPayouts() },
                 onVerifyConnection = { viewModel.triggerVerifyStripeConnection() },
-                onSelectDestination = { destId -> viewModel.selectStripeDestination(destId) },
+                onSelectDestination = { destId ->
+                    viewModel.selectStripeDestination(destId)
+                    stripePayoutState.externalAccounts.firstOrNull { it.id == destId }?.let {
+                        selectedPayoutCurrency = viewModel.findAnyCurrencyInfo(it.currencyCode)
+                    }
+                },
+                onSelectCurrencyCoin = { code ->
+                    selectedPayoutCurrency = viewModel.findAnyCurrencyInfo(code)
+                    viewModel.selectStripeExternalAccountCurrency(code)
+                },
                 onExecuteStripePayout = {
                     viewModel.executeLiveStripePayout(
                         amountInUsd = parsedAmount,
@@ -1606,28 +1615,25 @@ fun OwnerPayoutSectionView(
                                 }
                             }
 
-                            if (stripePayoutState.externalAccounts.isNotEmpty()) {
-                                LazyRow(
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    items(stripePayoutState.externalAccounts, key = { it.id }) { ext ->
-                                        val isDestSelected = stripePayoutState.selectedDestinationId == ext.id
-                                        FilterChip(
-                                            selected = isDestSelected,
-                                            onClick = { viewModel.selectStripeDestination(ext.id) },
-                                            label = {
-                                                Text(
-                                                    text = "${ext.label} ••••${ext.last4} (${ext.currencyCode})",
-                                                    fontSize = 10.sp,
-                                                    fontWeight = FontWeight.SemiBold
-                                                )
-                                            },
-                                            modifier = Modifier.testTag("disburse_stripe_dest_${ext.id}")
-                                        )
+                            ExternalAccountsCurrencyCoinsSection(
+                                externalAccounts = stripePayoutState.externalAccounts,
+                                selectedDestinationId = stripePayoutState.selectedDestinationId,
+                                selectedCurrencyCode = selectedPayoutCurrency.code,
+                                onSelectDestination = { destId ->
+                                    viewModel.selectStripeDestination(destId)
+                                    stripePayoutState.externalAccounts.firstOrNull { it.id == destId }?.let {
+                                        selectedPayoutCurrency = viewModel.findAnyCurrencyInfo(it.currencyCode)
                                     }
-                                }
-                            }
+                                },
+                                onSelectCurrencyCoin = { code ->
+                                    selectedPayoutCurrency = viewModel.findAnyCurrencyInfo(code)
+                                    viewModel.selectStripeExternalAccountCurrency(code)
+                                },
+                                scopeTag = "disburse",
+                                destinationTagPrefix = "disburse_stripe_dest_",
+                                includeAutoDestinationOption = false,
+                                compact = true
+                            )
                         }
                     }
 
@@ -1685,6 +1691,11 @@ fun OwnerPayoutSectionView(
                                         verticalAlignment = Alignment.CenterVertically,
                                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                                     ) {
+                                        CurrencyCoinEmblem(
+                                            currencyCode = selectedPayoutCurrency.code,
+                                            size = 22.dp,
+                                            selected = true
+                                        )
                                         Text(text = selectedPayoutCurrency.code, fontWeight = FontWeight.Bold, fontSize = 13.sp)
                                         Icon(imageVector = Icons.Default.ArrowDropDown, contentDescription = null, modifier = Modifier.size(18.dp))
                                     }

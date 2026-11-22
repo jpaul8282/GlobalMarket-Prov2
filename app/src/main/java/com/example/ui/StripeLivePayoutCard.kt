@@ -97,7 +97,8 @@ fun StripeLivePayoutCard(
     onCancelStripePayout: (String) -> Unit,
     modifier: Modifier = Modifier,
     onVerifyConnection: () -> Unit = onSyncStripe,
-    onSelectDestination: (String?) -> Unit = {}
+    onSelectDestination: (String?) -> Unit = {},
+    onSelectCurrencyCoin: (String) -> Unit = {}
 ) {
     val context = LocalContext.current
 
@@ -506,99 +507,18 @@ fun StripeLivePayoutCard(
                 }
             }
 
-            // 2B. External Bank / Card Payout Destinations (if discovered from v1/account)
-            if (stripeState.externalAccounts.isNotEmpty()) {
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(
-                        text = "STRIPE EXTERNAL PAYOUT DESTINATION",
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = CleanTextMuted,
-                        letterSpacing = 0.7.sp
-                    )
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        val isAutoSelected = stripeState.selectedDestinationId == null
-                        Surface(
-                            onClick = { onSelectDestination(null) },
-                            shape = RoundedCornerShape(12.dp),
-                            color = if (isAutoSelected) CleanPrimaryContainer else CleanSurfaceVariant,
-                            border = BorderStroke(1.dp, if (isAutoSelected) CleanPrimary else CleanBorderSubtle),
-                            modifier = Modifier
-                                .height(46.dp)
-                                .testTag("stripe_dest_auto")
-                        ) {
-                            Box(
-                                modifier = Modifier.padding(horizontal = 12.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = "Auto Default",
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (isAutoSelected) CleanPrimary else CleanTextSecondary
-                                )
-                            }
-                        }
-
-                        stripeState.externalAccounts.forEach { ext ->
-                            val isSelected = stripeState.selectedDestinationId == ext.id
-                            Surface(
-                                onClick = { onSelectDestination(ext.id) },
-                                shape = RoundedCornerShape(12.dp),
-                                color = if (isSelected) CleanSecondaryContainer else CleanSurfaceVariant,
-                                border = BorderStroke(1.dp, if (isSelected) CleanSecondary else CleanBorderSubtle),
-                                modifier = Modifier
-                                    .height(46.dp)
-                                    .testTag("stripe_dest_${ext.id}")
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 12.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = if (ext.type.equals("card", ignoreCase = true)) {
-                                            Icons.Default.CreditCard
-                                        } else {
-                                            Icons.Default.AccountBalance
-                                        },
-                                        contentDescription = null,
-                                        tint = if (isSelected) CleanSecondary else CleanTextSecondary,
-                                        modifier = Modifier.size(15.dp)
-                                    )
-                                    Column {
-                                        Text(
-                                            text = "${ext.label} ••••${ext.last4}",
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = if (isSelected) CleanSecondary else CleanTextPrimary
-                                        )
-                                        Text(
-                                            text = "${ext.currencyCode}${if (ext.isDefaultForCurrency) " • Default" else ""}",
-                                            fontSize = 9.sp,
-                                            color = CleanTextSecondary
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    val selectedDest = stripeState.externalAccounts.firstOrNull { it.id == stripeState.selectedDestinationId }
-                    if (selectedDest != null && !selectedDest.currencyCode.equals(currencyCode, ignoreCase = true)) {
-                        Text(
-                            text = "Note: ${selectedDest.label} ••••${selectedDest.last4} settles in ${selectedDest.currencyCode}. Match payout currency to ${selectedDest.currencyCode} or choose Auto Default.",
-                            fontSize = 10.sp,
-                            color = CleanOrangeText,
-                            lineHeight = 14.sp
-                        )
-                    }
-                }
-            }
+            // 2B. External Bank / Card Payout Destinations & All Stripe Currency Coins (136+)
+            ExternalAccountsCurrencyCoinsSection(
+                externalAccounts = stripeState.externalAccounts,
+                selectedDestinationId = stripeState.selectedDestinationId,
+                selectedCurrencyCode = currencyCode,
+                onSelectDestination = onSelectDestination,
+                onSelectCurrencyCoin = onSelectCurrencyCoin,
+                scopeTag = "stripe_card",
+                destinationTagPrefix = "stripe_dest_",
+                includeAutoDestinationOption = true,
+                compact = true
+            )
 
             // 3. Speed Rail Selector (Standard vs Instant)
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {

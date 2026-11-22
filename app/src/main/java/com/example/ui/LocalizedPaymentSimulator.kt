@@ -51,6 +51,7 @@ import androidx.compose.material.icons.filled.PointOfSale
 import androidx.compose.material.icons.filled.QrCode
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.Button
@@ -68,6 +69,7 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -133,6 +135,7 @@ fun LocalizedPaymentSimulator(
     val isSimulatorModalOpen by viewModel.isSimulatorModalOpen.collectAsStateWithLifecycle()
 
     var selectedRegionFilter by remember { mutableStateOf("All") }
+    var simulatorCurrencySearch by remember { mutableStateOf("") }
     var isFeeBreakdownExpanded by remember { mutableStateOf(false) }
 
     // Pulse animation for live FX market ticker
@@ -158,15 +161,12 @@ fun LocalizedPaymentSimulator(
     }
     val formattedConvertedTotal = formatter.format(convertedAmount, selectedCurrency.code)
 
-    // Filter currencies based on region chip
-    val filteredCurrencies = remember(selectedRegionFilter, viewModel.currencies) {
-        when (selectedRegionFilter) {
-            "G10" -> viewModel.currencies.filter { it.code in listOf("USD", "EUR", "GBP", "JPY", "CAD", "AUD", "CHF") }
-            "Europe" -> viewModel.currencies.filter { it.region == "Europe" }
-            "Asia-Pacific" -> viewModel.currencies.filter { it.region == "Asia-Pacific" }
-            "Americas" -> viewModel.currencies.filter { it.region == "Americas" }
-            else -> viewModel.currencies
-        }
+    // Filter Stripe currencies from CurrencyRepository based on region chip and search query
+    val filteredCurrencies = remember(selectedRegionFilter, simulatorCurrencySearch, viewModel.supportedStripeCurrencies) {
+        viewModel.filterSimulatorCurrencies(
+            query = simulatorCurrencySearch,
+            regionFilter = selectedRegionFilter
+        )
     }
 
     val availableRails = remember(selectedCurrency.code) {
@@ -302,10 +302,11 @@ fun LocalizedPaymentSimulator(
                 )
 
                 Text(
-                    text = "12 Currencies Active",
+                    text = "${viewModel.supportedStripeCurrencies.size} Stripe Currencies",
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
-                    color = CleanSecondary
+                    color = CleanSecondary,
+                    modifier = Modifier.testTag("simulator_currency_count")
                 )
             }
 
@@ -370,28 +371,75 @@ fun LocalizedPaymentSimulator(
                 )
             }
 
-            // 3. REGION FILTER TABS
+            // 3. STRIPE CURRENCY SEARCH & REGION FILTER TABS
+            OutlinedTextField(
+                value = simulatorCurrencySearch,
+                onValueChange = { simulatorCurrencySearch = it },
+                placeholder = {
+                    Text(
+                        text = "Search Stripe currencies by code or symbol (USD $, EUR €, KWD, JPY...)",
+                        fontSize = 11.sp
+                    )
+                },
+                leadingIcon = {
+                    Icon(
+                        imageVector = Icons.Default.Search,
+                        contentDescription = "Search currencies",
+                        tint = CleanPrimary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                },
+                trailingIcon = {
+                    if (simulatorCurrencySearch.isNotEmpty()) {
+                        IconButton(
+                            onClick = { simulatorCurrencySearch = "" },
+                            modifier = Modifier.minimumInteractiveComponentSize()
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Clear search",
+                                tint = CleanTextMuted,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+                },
+                singleLine = true,
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("simulator_currency_search"),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = CleanPrimary,
+                    unfocusedBorderColor = CleanBorder,
+                    focusedContainerColor = CleanSurfaceVariant,
+                    unfocusedContainerColor = CleanSurfaceVariant
+                )
+            )
+
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                listOf("All", "G10", "Europe", "Asia-Pacific", "Americas").forEach { region ->
+                listOf("All", "G10", "Popular", "Europe", "Asia-Pacific", "Americas", "Middle East", "Africa", "0-Decimal", "3-Decimal").forEach { region ->
                     val isSelected = selectedRegionFilter == region
                     Surface(
                         onClick = { selectedRegionFilter = region },
                         shape = RoundedCornerShape(12.dp),
                         color = if (isSelected) CleanPrimary else CleanSurfaceVariant,
                         border = BorderStroke(1.dp, if (isSelected) CleanPrimary else CleanBorderLight),
-                        modifier = Modifier.testTag("simulator_region_chip_$region")
+                        modifier = Modifier
+                            .minimumInteractiveComponentSize()
+                            .testTag("simulator_region_chip_$region")
                     ) {
                         Text(
                             text = region,
                             fontSize = 11.sp,
                             fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
                             color = if (isSelected) CleanOnPrimary else CleanTextSecondary,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
                         )
                     }
                 }
@@ -399,27 +447,30 @@ fun LocalizedPaymentSimulator(
 
             // 4. GLOBAL CURRENCY SELECTOR STRIP
             Text(
-                text = "Target Settlement Currency",
+                text = "Target Settlement Currency (${filteredCurrencies.size} shown)",
                 fontSize = 12.sp,
                 fontWeight = FontWeight.SemiBold,
                 color = CleanTextSecondary
             )
 
             LazyRow(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("simulator_currency_list"),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 contentPadding = PaddingValues(horizontal = 2.dp)
             ) {
-                items(filteredCurrencies) { currency ->
+                items(filteredCurrencies, key = { it.code }) { currency ->
                     val isSelected = selectedCurrency.code == currency.code
                     val rate = liveRates[currency.code] ?: currency.exchangeRate
                     val changePercent = rateChangePercents[currency.code] ?: 0.0
 
                     Card(
                         modifier = Modifier
-                            .width(88.dp)
+                            .minimumInteractiveComponentSize()
+                            .width(102.dp)
                             .clip(RoundedCornerShape(14.dp))
-                            .clickable { viewModel.selectCurrency(currency) }
+                            .clickable { viewModel.selectSimulatorCurrency(currency) }
                             .testTag("currency_toggle_${currency.code.lowercase()}"),
                         shape = RoundedCornerShape(14.dp),
                         colors = CardDefaults.cardColors(
@@ -435,12 +486,23 @@ fun LocalizedPaymentSimulator(
                             horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.spacedBy(3.dp)
                         ) {
-                            Text(text = currency.flagEmoji, fontSize = 20.sp)
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                CurrencyCoinEmblem(
+                                    currencyCode = currency.code,
+                                    size = 24.dp,
+                                    selected = isSelected
+                                )
+                                Text(text = currency.flagEmoji, fontSize = 16.sp)
+                            }
                             Text(
-                                text = currency.code,
-                                fontSize = 12.sp,
+                                text = "${currency.code} (${currency.symbol})",
+                                fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = if (isSelected) CleanPrimary else CleanTextPrimary
+                                color = if (isSelected) CleanPrimary else CleanTextPrimary,
+                                maxLines = 1
                             )
                             Text(
                                 text = if (rate >= 10.0) String.format(Locale.US, "%.1f", rate) else String.format(Locale.US, "%.3f", rate),
