@@ -8,6 +8,18 @@ service cloud.firestore {
     // -------------------------------------------------------------
     // HELPER FUNCTIONS & AUTHENTICATION CHECKS
     // -------------------------------------------------------------
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
     function isAuthenticated() {
       return request.auth != null;
     }
@@ -20,7 +32,7 @@ service cloud.firestore {
     // SCHEMA VALIDATORS
     // -------------------------------------------------------------
     function isValidUserProfile(data, userId) {
-      return data.userId == userId &&
+      return data.userId is string && data.userId == userId &&
         data.fullName is string && data.fullName.size() > 0 && data.fullName.size() <= 100 &&
         data.email is string && data.email.size() > 0 && data.email.size() <= 120 &&
         (!('role' in data) || (data.role is string && data.role.size() <= 50)) &&
@@ -29,12 +41,13 @@ service cloud.firestore {
         (!('country' in data) || (data.country is string && data.country.size() <= 60)) &&
         (!('currency' in data) || (data.currency is string && data.currency.size() <= 10)) &&
         data.createdAt is timestamp &&
+        data.createdAt <= request.time &&
         data.updatedAt is timestamp &&
         data.updatedAt <= request.time;
     }
 
     function isValidPayoutSetting(data, userId) {
-      return data.userId == userId &&
+      return data.userId is string && data.userId == userId &&
         (data.selectedMethod == 'BANK_WIRE' || data.selectedMethod == 'PAYPAL' || data.selectedMethod == 'STRIPE_PAYOUT') &&
         (!('bankName' in data) || (data.bankName is string && data.bankName.size() <= 100)) &&
         (!('accountHolderName' in data) || (data.accountHolderName is string && data.accountHolderName.size() <= 100)) &&
@@ -47,12 +60,13 @@ service cloud.firestore {
         (!('phoneOrPaypalMe' in data) || (data.phoneOrPaypalMe is string && data.phoneOrPaypalMe.size() <= 100)) &&
         (!('accountType' in data) || (data.accountType is string && data.accountType.size() <= 40)) &&
         data.createdAt is timestamp &&
+        data.createdAt <= request.time &&
         data.updatedAt is timestamp &&
         data.updatedAt <= request.time;
     }
 
     function isValidOwnerPayoutRecord(data, userId) {
-      return data.userId == userId &&
+      return data.userId is string && data.userId == userId &&
         data.payoutId is string && data.payoutId.size() > 0 && data.payoutId.size() <= 128 &&
         (data.method == 'BANK_WIRE' || data.method == 'PAYPAL' || data.method == 'STRIPE_PAYOUT' || data.method == 'IDEAL' || data.method == 'SEPA_INSTANT') &&
         data.amount is number && data.amount > 0 &&
@@ -69,13 +83,15 @@ service cloud.firestore {
     }
 
     function isValidCloudTransactionLog(data, userId) {
-      return data.userId == userId &&
-        data.logId is string && data.logId.size() > 0 &&
+      return data.userId is string && data.userId == userId &&
+        data.logId is string && data.logId.size() > 0 && data.logId.size() <= 128 &&
         (data.logType == 'PAYMENT' || data.logType == 'SCANNED_ITEM' || data.logType == 'PAYOUT' || data.logType == 'WEB_CHECKOUT') &&
-        data.title is string && data.title.size() > 0 &&
-        data.amount is number &&
-        data.currencyCode is string && data.currencyCode.size() > 0 &&
-        data.referenceCode is string && data.referenceCode.size() > 0 &&
+        data.title is string && data.title.size() > 0 && data.title.size() <= 160 &&
+        data.amount is number && data.amount >= 0 &&
+        data.currencyCode is string && data.currencyCode.size() > 0 && data.currencyCode.size() <= 10 &&
+        data.referenceCode is string && data.referenceCode.size() > 0 && data.referenceCode.size() <= 128 &&
+        (!('customerOrRecipient' in data) || (data.customerOrRecipient is string && data.customerOrRecipient.size() <= 120)) &&
+        (!('status' in data) || (data.status is string && data.status.size() <= 40)) &&
         data.createdAt is timestamp &&
         data.createdAt <= request.time;
     }
@@ -84,39 +100,119 @@ service cloud.firestore {
     // COLLECTION MATCH RULES
     // -------------------------------------------------------------
     match /users/{userId} {
-      allow read: if isOwner(userId);
-      allow create: if isOwner(userId) && isValidUserProfile(request.resource.data, userId);
-      allow update: if isOwner(userId) && isValidUserProfile(request.resource.data, userId);
-      allow delete: if isOwner(userId);
+      allow get: if isOwner(userId) && isValidId(userId);
+      allow list: if false;
+
+      allow create: if isOwner(userId) &&
+        isValidId(userId) &&
+        incoming().keys().hasAll(['userId', 'fullName', 'email', 'createdAt', 'updatedAt']) &&
+        incoming().keys().hasOnly(['userId', 'fullName', 'email', 'role', 'organization', 'orgId', 'country', 'currency', 'createdAt', 'updatedAt']) &&
+        isValidUserProfile(incoming(), userId);
+
+      allow update: if isOwner(userId) &&
+        isValidId(userId) &&
+        isValidUserProfile(incoming(), userId) &&
+        incoming().userId == existing().userId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['fullName', 'email', 'role', 'organization', 'orgId', 'country', 'currency', 'updatedAt']);
+
+      allow delete: if isOwner(userId) && isValidId(userId);
 
       // User's payout configuration
       match /payout_settings/{settingId} {
-        allow read: if isOwner(userId);
-        allow create: if isOwner(userId) && isValidPayoutSetting(request.resource.data, userId);
-        allow update: if isOwner(userId) && isValidPayoutSetting(request.resource.data, userId);
-        allow delete: if isOwner(userId);
+        allow get: if isOwner(userId) && isValidId(settingId);
+        allow list: if isOwner(userId);
+
+        allow create: if isOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(settingId) &&
+          incoming().keys().hasAll(['userId', 'selectedMethod', 'createdAt', 'updatedAt']) &&
+          incoming().keys().hasOnly([
+            'userId', 'selectedMethod', 'bankName', 'accountHolderName',
+            'accountNumberOrIban', 'swiftBic', 'routingNumber', 'intermediaryBank',
+            'paypalEmailOrId', 'recipientName', 'phoneOrPaypalMe', 'accountType',
+            'createdAt', 'updatedAt'
+          ]) &&
+          isValidPayoutSetting(incoming(), userId);
+
+        allow update: if isOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(settingId) &&
+          isValidPayoutSetting(incoming(), userId) &&
+          incoming().userId == existing().userId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'selectedMethod', 'bankName', 'accountHolderName',
+            'accountNumberOrIban', 'swiftBic', 'routingNumber', 'intermediaryBank',
+            'paypalEmailOrId', 'recipientName', 'phoneOrPaypalMe', 'accountType',
+            'updatedAt'
+          ]);
+
+        allow delete: if isOwner(userId) && isValidId(settingId);
       }
 
       // User's owner payout history
       match /payouts/{payoutId} {
-        allow read: if isOwner(userId);
+        allow get: if isOwner(userId) && isValidId(payoutId);
+        allow list: if isOwner(userId);
+
         allow create: if isOwner(userId) &&
-          isValidOwnerPayoutRecord(request.resource.data, userId) &&
-          request.resource.data.payoutId == payoutId;
+          isValidId(userId) &&
+          isValidId(payoutId) &&
+          incoming().payoutId == payoutId &&
+          incoming().keys().hasAll([
+            'userId', 'payoutId', 'method', 'amount', 'fee', 'netAmount',
+            'currency', 'recipientName', 'reference', 'status', 'createdAt'
+          ]) &&
+          incoming().keys().hasOnly([
+            'userId', 'payoutId', 'method', 'amount', 'fee', 'netAmount',
+            'currency', 'recipientName', 'destinationSummary', 'reference',
+            'status', 'createdAt', 'updatedAt'
+          ]) &&
+          isValidOwnerPayoutRecord(incoming(), userId);
+
         allow update: if isOwner(userId) &&
-          isValidOwnerPayoutRecord(request.resource.data, userId) &&
-          request.resource.data.userId == resource.data.userId &&
-          request.resource.data.payoutId == resource.data.payoutId &&
-          request.resource.data.createdAt == resource.data.createdAt;
+          isValidId(userId) &&
+          isValidId(payoutId) &&
+          isValidOwnerPayoutRecord(incoming(), userId) &&
+          incoming().userId == existing().userId &&
+          incoming().payoutId == existing().payoutId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']);
+
         allow delete: if false; // Payout records are immutable audit trail
       }
 
       // Cloud synced transaction & audit logs
       match /transaction_logs/{logId} {
-        allow read: if isOwner(userId);
-        allow create: if isOwner(userId) && isValidCloudTransactionLog(request.resource.data, userId);
-        allow update: if isOwner(userId) && isValidCloudTransactionLog(request.resource.data, userId);
-        allow delete: if isOwner(userId);
+        allow get: if isOwner(userId) && isValidId(logId);
+        allow list: if isOwner(userId);
+
+        allow create: if isOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(logId) &&
+          incoming().logId == logId &&
+          incoming().keys().hasAll([
+            'userId', 'logId', 'logType', 'title', 'amount',
+            'currencyCode', 'referenceCode', 'createdAt'
+          ]) &&
+          incoming().keys().hasOnly([
+            'userId', 'logId', 'logType', 'title', 'amount',
+            'currencyCode', 'referenceCode', 'customerOrRecipient',
+            'status', 'createdAt'
+          ]) &&
+          isValidCloudTransactionLog(incoming(), userId);
+
+        allow update: if isOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(logId) &&
+          isValidCloudTransactionLog(incoming(), userId) &&
+          incoming().userId == existing().userId &&
+          incoming().logId == existing().logId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['title', 'customerOrRecipient', 'status']);
+
+        allow delete: if isOwner(userId) && isValidId(logId);
       }
     }
   }

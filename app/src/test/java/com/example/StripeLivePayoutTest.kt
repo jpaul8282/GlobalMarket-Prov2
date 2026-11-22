@@ -20,6 +20,7 @@ import com.example.data.StripeExternalAccountDto
 import com.example.data.StripeExternalAccountListDto
 import com.example.data.StripePayoutApiResult
 import com.example.data.StripePayoutApiService
+import com.example.data.StripePaymentIntentDto
 import com.example.data.StripePayoutDto
 import com.example.data.StripePayoutGateway
 import com.example.data.StripePayoutListResponseDto
@@ -194,6 +195,38 @@ private class FakeStripePayoutApiService(
         storedRemotePayouts[index] = target
         return target
     }
+
+    var lastIntentAmountMinor: Long? = null
+    var lastIntentCurrency: String? = null
+    var lastIntentReceiptEmail: String? = null
+
+    override suspend fun createPaymentIntent(
+        authorization: String,
+        amountMinor: Long,
+        currencyLowercase: String,
+        automaticPaymentMethodsEnabled: Boolean,
+        description: String?,
+        receiptEmail: String?,
+        metadataSource: String,
+        idempotencyKey: String?,
+        stripeAccount: String?
+    ): StripePaymentIntentDto {
+        lastAuthHeader = authorization
+        lastStripeAccountHeader = stripeAccount
+        lastIntentAmountMinor = amountMinor
+        lastIntentCurrency = currencyLowercase
+        lastIntentReceiptEmail = receiptEmail
+        return StripePaymentIntentDto(
+            id = "pi_test_live_987654",
+            amountMinor = amountMinor,
+            currency = currencyLowercase,
+            clientSecret = "pi_test_live_987654_secret_abc123",
+            status = "requires_payment_method",
+            livemode = authorization.contains("_live_"),
+            description = description,
+            receiptEmail = receiptEmail
+        )
+    }
 }
 
 @RunWith(RobolectricTestRunner::class)
@@ -338,15 +371,53 @@ class StripeLivePayoutTest {
     }
 
     @Test
-    fun `publishable live key without secret key does not falsely report LIVE MODE`() {
+    fun `publishable live key without secret key does not falsely report LIVE MODE`() = runBlocking {
         val gateway = StripePayoutGateway(
             publishableKeyProvider = { "pk_live_51PublishableOnly1234" },
             secretKeyProvider = { "MY_STRIPE_SECRET_KEY" }
         )
         assertTrue(gateway.isPublishableKeyConfigured())
+        assertFalse(gateway.isSecretKeyConfigured())
         assertFalse(gateway.isConfigured())
         assertFalse(gateway.isLiveKey())
         assertEquals("SECRET KEY REQUIRED", gateway.environmentLabel())
+
+        val intentResult = gateway.createPaymentIntent(
+            amountMinor = 5000L,
+            currencyCode = "EUR"
+        )
+        assertTrue(intentResult is StripePayoutApiResult.MissingApiKey)
+    }
+
+    @Test
+    fun `createPaymentIntent sends bearer auth minor units and returns client secret`() = runBlocking {
+        val fakeApi = FakeStripePayoutApiService()
+        val gateway = StripePayoutGateway(
+            apiProvider = { fakeApi },
+            publishableKeyProvider = { "pk_live_51PublishableExample9999" },
+            secretKeyProvider = { "sk_test_51ExampleSecret9999" },
+            connectedAccountProvider = { "acct_1ConnectTest99" }
+        )
+        assertTrue(gateway.isPublishableKeyConfigured())
+        assertTrue(gateway.isSecretKeyConfigured())
+
+        val res = gateway.createPaymentIntent(
+            amountMinor = 9200L,
+            currencyCode = "EUR",
+            description = "POS Checkout",
+            receiptEmail = "buyer@example.com",
+            idempotencyKey = "idem_123"
+        )
+        assertTrue(res is StripePayoutApiResult.Success)
+        val session = (res as StripePayoutApiResult.Success).data
+        assertEquals("pi_test_live_987654", session.paymentIntentId)
+        assertEquals("pi_test_live_987654_secret_abc123", session.clientSecret)
+        assertEquals("EUR", session.currencyCode)
+        assertEquals(9200L, fakeApi.lastIntentAmountMinor)
+        assertEquals("eur", fakeApi.lastIntentCurrency)
+        assertEquals("buyer@example.com", fakeApi.lastIntentReceiptEmail)
+        assertEquals("Bearer sk_test_51ExampleSecret9999", fakeApi.lastAuthHeader)
+        assertEquals("acct_1ConnectTest99", fakeApi.lastStripeAccountHeader)
     }
 
     @Test

@@ -509,8 +509,8 @@ class StripeTerminalPaymentProcessor(
     fun sdkEnvironmentBadge(): String {
         val key = resolvedPublishableKey() ?: return "STRIPE SDK • SANDBOX SIM"
         return when {
-            key.startsWith("pk_live_") -> "STRIPE SDK • LIVE KEY (SIM SAFE)"
-            key.startsWith("pk_test_") -> "STRIPE SDK • TEST KEY"
+            key.startsWith("pk_live_") -> "STRIPE SDK • LIVE KEY ACTIVE"
+            key.startsWith("pk_test_") -> "STRIPE SDK • TEST KEY ACTIVE"
             else -> "STRIPE SDK • SANDBOX"
         }
     }

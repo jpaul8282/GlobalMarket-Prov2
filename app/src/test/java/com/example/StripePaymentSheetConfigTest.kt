@@ -11,8 +11,16 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.example.data.AppDatabase
 import com.example.data.SimulatedPaymentSheetOutcome
+import com.example.data.StripeAccountDto
+import com.example.data.StripeBalanceResponseDto
+import com.example.data.StripePaymentIntentDto
 import com.example.data.StripePaymentSheetConfigFactory
+import com.example.data.StripePaymentSheetPreparedConfig
 import com.example.data.StripePaymentSheetSetupRequest
+import com.example.data.StripePayoutApiService
+import com.example.data.StripePayoutDto
+import com.example.data.StripePayoutGateway
+import com.example.data.StripePayoutListResponseDto
 import com.example.data.StripeTerminalPaymentProcessor
 import com.example.data.TransactionRepository
 import com.example.ui.GlobalMarketViewModel
@@ -271,5 +279,159 @@ class StripePaymentSheetConfigTest {
         )
         composeTestRule.waitForIdle()
         composeTestRule.onNodeWithTag("stripe_terminal_success_panel").assertIsDisplayed()
+    }
+
+    @Test
+    fun livePaymentSheet_createsPaymentIntentAndTriggersLaunchCallback() {
+        runBlocking {
+            val fakeApi = object : StripePayoutApiService {
+                override suspend fun getAccount(authorization: String, stripeAccount: String?) = StripeAccountDto()
+                override suspend fun getBalance(authorization: String, stripeAccount: String?) = StripeBalanceResponseDto()
+                override suspend fun listPayouts(authorization: String, limit: Int, stripeAccount: String?) = StripePayoutListResponseDto()
+                override suspend fun createPayout(
+                    authorization: String,
+                    amountMinor: Long,
+                    currencyLowercase: String,
+                    method: String,
+                    destination: String?,
+                    description: String?,
+                    statementDescriptor: String?,
+                    metadataSource: String,
+                    idempotencyKey: String?,
+                    stripeAccount: String?
+                ) = StripePayoutDto()
+
+                override suspend fun cancelPayout(authorization: String, payoutId: String, stripeAccount: String?) = StripePayoutDto()
+
+                override suspend fun createPaymentIntent(
+                    authorization: String,
+                    amountMinor: Long,
+                    currencyLowercase: String,
+                    automaticPaymentMethodsEnabled: Boolean,
+                    description: String?,
+                    receiptEmail: String?,
+                    metadataSource: String,
+                    idempotencyKey: String?,
+                    stripeAccount: String?
+                ): StripePaymentIntentDto {
+                    return StripePaymentIntentDto(
+                        id = "pi_live_pos_001",
+                        amountMinor = amountMinor,
+                        currency = currencyLowercase,
+                        clientSecret = "pi_live_pos_001_secret_xyz999",
+                        status = "requires_payment_method",
+                        livemode = false
+                    )
+                }
+            }
+
+            val liveProcessor = StripeTerminalPaymentProcessor(
+                publishableKeyProvider = { "pk_live_51TestReadyKey9999" }
+            )
+            val liveGateway = StripePayoutGateway(
+                apiProvider = { fakeApi },
+                publishableKeyProvider = { "pk_live_51TestReadyKey9999" },
+                secretKeyProvider = { "sk_test_51SecretForIntent9999" }
+            )
+            val liveVm = GlobalMarketViewModel(
+                repository = repository,
+                firestoreRepository = null,
+                stripePayoutGateway = liveGateway,
+                stripeTerminalProcessor = liveProcessor
+            )
+
+            assertTrue(liveVm.isStripePublishableKeyConfigured())
+            assertTrue(liveVm.isStripeLivePaymentIntentReady())
+            assertEquals("STRIPE SDK • LIVE KEY ACTIVE", liveVm.getStripeSdkEnvironmentBadge())
+
+            var launchedConfig: StripePaymentSheetPreparedConfig? = null
+            var launchedSecret: String? = null
+
+            liveVm.createAndPresentLivePaymentSheet(context) { cfg, secret ->
+                launchedConfig = cfg
+                launchedSecret = secret
+            }
+
+            repeat(50) {
+                Shadows.shadowOf(Looper.getMainLooper()).idle()
+                if (launchedSecret != null) return@repeat
+                kotlinx.coroutines.delay(15)
+            }
+
+            assertEquals("pi_live_pos_001_secret_xyz999", launchedSecret)
+            assertNotNull(launchedConfig)
+            assertTrue(
+                liveVm.stripeTerminalCheckoutState.value is StripeTerminalCheckoutState.ConfirmingPaymentIntent
+            )
+        }
+    }
+
+    @Test
+    fun paymentSheetTabUi_showsPublishableKeyStatusAndLiveLaunchButtonWhenConfigured() {
+        val fakeApi = object : StripePayoutApiService {
+            override suspend fun getAccount(authorization: String, stripeAccount: String?) = StripeAccountDto()
+            override suspend fun getBalance(authorization: String, stripeAccount: String?) = StripeBalanceResponseDto()
+            override suspend fun listPayouts(authorization: String, limit: Int, stripeAccount: String?) = StripePayoutListResponseDto()
+            override suspend fun createPayout(
+                authorization: String,
+                amountMinor: Long,
+                currencyLowercase: String,
+                method: String,
+                destination: String?,
+                description: String?,
+                statementDescriptor: String?,
+                metadataSource: String,
+                idempotencyKey: String?,
+                stripeAccount: String?
+            ) = StripePayoutDto()
+            override suspend fun cancelPayout(authorization: String, payoutId: String, stripeAccount: String?) = StripePayoutDto()
+            override suspend fun createPaymentIntent(
+                authorization: String,
+                amountMinor: Long,
+                currencyLowercase: String,
+                automaticPaymentMethodsEnabled: Boolean,
+                description: String?,
+                receiptEmail: String?,
+                metadataSource: String,
+                idempotencyKey: String?,
+                stripeAccount: String?
+            ) = StripePaymentIntentDto(
+                id = "pi_ui_launch_01",
+                amountMinor = amountMinor,
+                currency = currencyLowercase,
+                clientSecret = "pi_ui_launch_01_secret_ui999",
+                status = "requires_payment_method"
+            )
+        }
+        val liveProcessor = StripeTerminalPaymentProcessor(
+            publishableKeyProvider = { "pk_live_51TestReadyKey9999" }
+        )
+        val liveGateway = StripePayoutGateway(
+            apiProvider = { fakeApi },
+            publishableKeyProvider = { "pk_live_51TestReadyKey9999" },
+            secretKeyProvider = { "sk_test_51SecretForIntent9999" }
+        )
+        val liveVm = GlobalMarketViewModel(
+            repository = repository,
+            firestoreRepository = null,
+            stripePayoutGateway = liveGateway,
+            stripeTerminalProcessor = liveProcessor
+        )
+
+        composeTestRule.setContent {
+            MyApplicationTheme {
+                StripeTerminalCheckoutModal(
+                    viewModel = liveVm,
+                    onDismiss = {},
+                    onPresentLivePaymentSheet = { _, _ -> }
+                )
+            }
+        }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("stripe_terminal_mode_payment_sheet").performClick()
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("paymentsheet_publishable_key_status").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("paymentsheet_launch_native_button").performScrollTo().assertIsDisplayed()
     }
 }

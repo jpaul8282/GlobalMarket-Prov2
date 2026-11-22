@@ -133,6 +133,10 @@ fun StripePaymentSheetSection(
         viewModel.preparePaymentSheetConfiguration(context)
     }
 
+    val isCreatingIntent by viewModel.isCreatingLivePaymentIntent.collectAsStateWithLifecycle()
+    val hasPublishableKey = remember { viewModel.isStripePublishableKeyConfigured() }
+    val hasLiveIntentReady = remember { viewModel.isStripeLivePaymentIntentReady() }
+
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -146,30 +150,45 @@ fun StripePaymentSheetSection(
             border = BorderStroke(1.dp, StripeIndigo.copy(alpha = 0.3f)),
             modifier = Modifier.fillMaxWidth()
         ) {
-            Row(
+            Column(
                 modifier = Modifier.padding(12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                Icon(
-                    imageVector = Icons.Default.SettingsSuggest,
-                    contentDescription = "Stripe PaymentSheet Configuration",
-                    tint = StripeIndigo,
-                    modifier = Modifier.size(20.dp)
-                )
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = stringResource(R.string.paymentsheet_config_title),
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = StripeIndigo
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.SettingsSuggest,
+                        contentDescription = "Stripe PaymentSheet Configuration",
+                        tint = StripeIndigo,
+                        modifier = Modifier.size(20.dp)
                     )
-                    Text(
-                        text = "Official PaymentSheet.Configuration • Deferred Intent & Customer Sheet Ready",
-                        fontSize = 10.sp,
-                        color = CleanTextSecondary
-                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = stringResource(R.string.paymentsheet_config_title),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = StripeIndigo
+                        )
+                        Text(
+                            text = "Official PaymentSheet.Configuration • ${prepared.environmentBadge}",
+                            fontSize = 10.sp,
+                            color = CleanTextSecondary
+                        )
+                    }
                 }
+                Text(
+                    text = if (hasPublishableKey) {
+                        "Publishable Key: ${prepared.publishableKeyHint} • PaymentConfiguration initialized"
+                    } else {
+                        "Publishable Key: Configure STRIPE_PUBLISHABLE_KEY in AI Studio Secrets"
+                    },
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (hasPublishableKey) CleanPrimary else CleanTextSecondary,
+                    modifier = Modifier.testTag("paymentsheet_publishable_key_status")
+                )
             }
         }
 
@@ -505,11 +524,22 @@ fun StripePaymentSheetSection(
             )
         }
 
-        // Secondary Native Stripe Sheet Launcher (shown only when a backend client_secret is attached)
+        // Secondary Native Stripe Sheet Launcher (via backend/attached client_secret OR automatic PaymentIntent creation)
         val trimmedSecret = clientSecret.trim()
-        if (StripePaymentSheetConfigFactory.isLikelyLivePaymentIntentClientSecret(trimmedSecret)) {
+        val hasValidAttachedSecret = StripePaymentSheetConfigFactory.isLikelyLivePaymentIntentClientSecret(trimmedSecret)
+        if (hasValidAttachedSecret || hasLiveIntentReady) {
             OutlinedButton(
-                onClick = { onPresentLivePaymentSheet(prepared, trimmedSecret) },
+                onClick = {
+                    if (hasValidAttachedSecret) {
+                        onPresentLivePaymentSheet(prepared, trimmedSecret)
+                    } else {
+                        viewModel.createAndPresentLivePaymentSheet(
+                            context = context,
+                            onPresentLivePaymentSheet = onPresentLivePaymentSheet
+                        )
+                    }
+                },
+                enabled = !isCreatingIntent,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(48.dp)
@@ -525,9 +555,17 @@ fun StripePaymentSheetSection(
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = stringResource(R.string.paymentsheet_launch_native_cta),
+                    text = if (isCreatingIntent) {
+                        "Creating Stripe PaymentIntent..."
+                    } else if (hasValidAttachedSecret) {
+                        stringResource(R.string.paymentsheet_launch_native_cta)
+                    } else {
+                        "Create Intent & Launch Live PaymentSheet"
+                    },
                     fontWeight = FontWeight.Bold,
-                    fontSize = 13.sp
+                    fontSize = 13.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
         }

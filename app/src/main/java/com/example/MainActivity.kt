@@ -45,6 +45,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -56,6 +57,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.data.AppDatabase
 import com.example.data.FirestoreRepository
+import com.example.data.PaymentHandler
 import com.example.data.TransactionEntity
 import com.example.data.TransactionRepository
 import com.example.ui.AppLanguage
@@ -63,10 +65,13 @@ import com.example.ui.AuthScreen
 import com.example.ui.attemptAutoSignIn
 import com.example.ui.signOutUser
 import androidx.compose.runtime.withFrameNanos
+import com.google.firebase.Firebase
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
+import com.google.firebase.auth.auth
 import com.google.firebase.firestore.FirebaseFirestore
 import androidx.credentials.CredentialManager
+import com.stripe.android.paymentsheet.PaymentSheet
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import com.example.ui.BarcodeScannerModal
@@ -154,7 +159,8 @@ class MainActivity : ComponentActivity() {
                         null
                     }
                     val firestoreRepository = firestoreDb?.let { FirestoreRepository(it) }
-                    val auth = FirebaseAuth.getInstance()
+                    val auth = Firebase.auth
+                    PaymentHandler().initializeStripeSdk(appContext)
                     AppBootstrapDependencies(
                         repository = repository,
                         firestoreRepository = firestoreRepository,
@@ -222,6 +228,10 @@ class MainActivity : ComponentActivity() {
                                 activeBootstrap.firestoreRepository
                             )
                         )
+                        val paymentHandler = remember { PaymentHandler() }
+                        val rootPaymentSheet = PaymentSheet.Builder { result ->
+                            viewModel.onNativePaymentSheetResult(result)
+                        }.build()
                         SideEffect {
                             attachedViewModel = viewModel
                         }
@@ -267,6 +277,25 @@ class MainActivity : ComponentActivity() {
                         MainContentSwitcher(
                             selectedTab = selectedTab,
                             viewModel = viewModel,
+                            onCheckoutWithPaymentHandler = {
+                                paymentHandler.launchCheckout(
+                                    context = context,
+                                    viewModel = viewModel,
+                                    paymentSheet = rootPaymentSheet
+                                )
+                            },
+                            onSignOutRequested = {
+                                val cm = CredentialManager.create(context)
+                                signOutUser(
+                                    context = context,
+                                    credentialManager = cm,
+                                    onBeforeSignOut = { viewModel.prepareForSignOut() },
+                                    onSignOutComplete = {
+                                        Toast.makeText(context, "Signed out cleanly", Toast.LENGTH_SHORT).show()
+                                    },
+                                    scope = scope
+                                )
+                            },
                             modifier = Modifier.fillMaxSize()
                         )
 
@@ -391,7 +420,15 @@ class MainActivity : ComponentActivity() {
                     if (isCheckoutVisible) {
                         StripeTerminalCheckoutModal(
                             viewModel = viewModel,
-                            onDismiss = { viewModel.closeCheckout() }
+                            onDismiss = { viewModel.closeCheckout() },
+                            onPresentLivePaymentSheet = { prepared, secret ->
+                                paymentHandler.presentPaymentSheet(
+                                    context = context,
+                                    paymentSheet = rootPaymentSheet,
+                                    paymentIntentClientSecret = secret,
+                                    configuration = prepared.configuration
+                                )
+                            }
                         )
                     }
 
@@ -468,6 +505,8 @@ class MainActivity : ComponentActivity() {
 fun MainContentSwitcher(
     selectedTab: Int,
     viewModel: GlobalMarketViewModel,
+    onCheckoutWithPaymentHandler: () -> Unit = { viewModel.openPaymentSheetCheckout() },
+    onSignOutRequested: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Crossfade(
@@ -476,12 +515,21 @@ fun MainContentSwitcher(
         modifier = modifier
     ) { tab ->
         when (tab) {
-            0 -> GlobalMarketDashboard(viewModel = viewModel)
+            0 -> GlobalMarketDashboard(
+                viewModel = viewModel,
+                onCheckoutClick = onCheckoutWithPaymentHandler
+            )
             1 -> TransactionSummaryScreen(viewModel = viewModel)
             2 -> AnalyticsView(viewModel = viewModel)
             3 -> AudienceView(viewModel = viewModel)
-            4 -> EnhancedAccountSettingsView(viewModel = viewModel)
-            else -> GlobalMarketDashboard(viewModel = viewModel)
+            4 -> EnhancedAccountSettingsView(
+                viewModel = viewModel,
+                onSignOutRequested = onSignOutRequested
+            )
+            else -> GlobalMarketDashboard(
+                viewModel = viewModel,
+                onCheckoutClick = onCheckoutWithPaymentHandler
+            )
         }
     }
 }
@@ -568,6 +616,7 @@ fun CleanBottomNavigation(
 @Composable
 fun GlobalMarketDashboard(
     viewModel: GlobalMarketViewModel,
+    onCheckoutClick: () -> Unit = { viewModel.openPaymentSheetCheckout() },
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -821,36 +870,68 @@ fun GlobalMarketDashboard(
                     }
 
                     Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.padding(top = 10.dp)
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier
-                                .clip(CircleShape)
-                                .background(Color.White.copy(alpha = 0.55f))
-                                .padding(horizontal = 10.dp, vertical = 4.dp)
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.TrendingUp,
-                                contentDescription = "Trend",
-                                tint = CleanOnPrimaryContainer,
-                                modifier = Modifier.size(14.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .clip(CircleShape)
+                                    .background(Color.White.copy(alpha = 0.55f))
+                                    .padding(horizontal = 10.dp, vertical = 4.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.TrendingUp,
+                                    contentDescription = "Trend",
+                                    tint = CleanOnPrimaryContainer,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "+12.4%",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = CleanOnPrimaryContainer
+                                )
+                            }
                             Text(
-                                text = "+12.4%",
+                                text = "vs last month",
                                 fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = CleanOnPrimaryContainer
+                                color = CleanOnPrimaryContainer.copy(alpha = 0.65f)
                             )
                         }
-                        Text(
-                            text = "vs last month",
-                            fontSize = 11.sp,
-                            color = CleanOnPrimaryContainer.copy(alpha = 0.65f)
-                        )
+
+                        Button(
+                            onClick = onCheckoutClick,
+                            shape = RoundedCornerShape(14.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = StripeIndigo,
+                                contentColor = StripeOnIndigo
+                            ),
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+                            modifier = Modifier
+                                .defaultMinSize(minHeight = 48.dp)
+                                .testTag("main_checkout_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.ShoppingBag,
+                                contentDescription = "Open Stripe PaymentSheet Checkout",
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = stringResource(R.string.main_checkout_button),
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
                     }
                 }
             }
@@ -2400,11 +2481,14 @@ fun AudienceRegionRow(flag: String, country: String, buyers: String, growth: Str
 @Composable
 fun EnhancedAccountSettingsView(
     viewModel: GlobalMarketViewModel,
+    onSignOutRequested: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val profile by viewModel.userProfile.collectAsStateWithLifecycle()
     val isSubscribed by viewModel.isSubscribed.collectAsStateWithLifecycle()
+    val cloudSyncError by viewModel.cloudSyncError.collectAsStateWithLifecycle()
+    val firebaseUser = remember(profile.email) { Firebase.auth.currentUser }
 
     var isEditProfileDialogVisible by remember { mutableStateOf(false) }
     var editName by remember { mutableStateOf(profile.name) }
@@ -2523,6 +2607,71 @@ fun EnhancedAccountSettingsView(
                                 color = CleanPrimary,
                                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                             )
+                        }
+                    }
+
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = CleanPrimaryContainer.copy(alpha = 0.45f),
+                        border = BorderStroke(1.dp, CleanPrimary.copy(alpha = 0.25f)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("google_auth_session_badge")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.VerifiedUser,
+                                contentDescription = "Google Sign-In Verified",
+                                tint = CleanPrimary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Google Sign-In Authenticated",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = CleanTextPrimary
+                                )
+                                Text(
+                                    text = firebaseUser?.email?.takeIf { it.isNotBlank() }
+                                        ?.let { "Synced as $it (${firebaseUser.uid.take(8)}…)" }
+                                        ?: "Firebase Auth & Cloud Firestore active",
+                                    fontSize = 11.sp,
+                                    color = CleanTextSecondary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                    }
+
+                    if (cloudSyncError != null) {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.errorContainer,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("cloud_sync_error_banner")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = cloudSyncError ?: "",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onErrorContainer,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                TextButton(onClick = { viewModel.clearCloudSyncError() }) {
+                                    Text("Dismiss", fontSize = 11.sp)
+                                }
+                            }
                         }
                     }
                 }
@@ -2908,18 +3057,23 @@ fun EnhancedAccountSettingsView(
                     val credentialManager = remember { CredentialManager.create(context) }
                     OutlinedButton(
                         onClick = {
-                            signOutUser(
-                                context = context,
-                                credentialManager = credentialManager,
-                                onSignOutComplete = {
-                                    Toast.makeText(context, "Signed out cleanly", Toast.LENGTH_SHORT).show()
-                                },
-                                scope = signOutScope
-                            )
+                            if (onSignOutRequested != null) {
+                                onSignOutRequested()
+                            } else {
+                                signOutUser(
+                                    context = context,
+                                    credentialManager = credentialManager,
+                                    onBeforeSignOut = { viewModel.prepareForSignOut() },
+                                    onSignOutComplete = {
+                                        Toast.makeText(context, "Signed out cleanly", Toast.LENGTH_SHORT).show()
+                                    },
+                                    scope = signOutScope
+                                )
+                            }
                         },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(46.dp)
+                            .height(48.dp)
                             .testTag("sign_out_button"),
                         shape = RoundedCornerShape(14.dp),
                         border = BorderStroke(1.dp, CleanBorder),

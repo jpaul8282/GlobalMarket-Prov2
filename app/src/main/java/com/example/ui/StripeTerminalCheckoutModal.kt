@@ -103,6 +103,7 @@ import com.example.ui.theme.StripeIndigo
 import com.example.ui.theme.StripeIndigoContainer
 import com.example.ui.theme.StripeOnIndigo
 import com.example.util.CurrencyFormatter
+import com.example.data.StripePaymentSheetPreparedConfig
 import com.stripe.android.paymentsheet.PaymentSheet
 import java.util.Locale
 
@@ -125,6 +126,7 @@ private enum class CheckoutModalTab {
 fun StripeTerminalCheckoutModal(
     viewModel: GlobalMarketViewModel,
     onDismiss: () -> Unit,
+    onPresentLivePaymentSheet: ((StripePaymentSheetPreparedConfig, String) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -143,18 +145,25 @@ fun StripeTerminalCheckoutModal(
     val cvv by viewModel.cvv.collectAsStateWithLifecycle()
     val country by viewModel.selectedCountry.collectAsStateWithLifecycle()
 
-    var activeTab by remember { mutableStateOf(CheckoutModalTab.CARD) }
+    val openToPaymentSheet by viewModel.openCheckoutToPaymentSheet.collectAsStateWithLifecycle()
+    var activeTab by remember(openToPaymentSheet) {
+        mutableStateOf(
+            if (openToPaymentSheet) CheckoutModalTab.PAYMENT_SHEET else CheckoutModalTab.CARD
+        )
+    }
     var paymentMode by remember { mutableStateOf(StripeTerminalPaymentMode.CARD) }
     var force3dsChallenge by remember { mutableStateOf(false) }
     var idealBankCode by remember { mutableStateOf("ing") }
     var sepaIban by remember { mutableStateOf("NL43INGB0006372146") }
     var validationErrorText by remember { mutableStateOf<String?>(null) }
 
-    val paymentSheet = remember {
+    val fallbackPaymentSheet = if (onPresentLivePaymentSheet == null) {
         PaymentSheet.Builder { result ->
             viewModel.onNativePaymentSheetResult(result)
-        }
-    }.build()
+        }.build()
+    } else {
+        null
+    }
 
     LaunchedEffect(Unit) {
         viewModel.initializeStripeTerminalSdk(context)
@@ -523,10 +532,14 @@ fun StripeTerminalCheckoutModal(
                             StripePaymentSheetSection(
                                 viewModel = viewModel,
                                 onPresentLivePaymentSheet = { prepared, secret ->
-                                    paymentSheet.presentWithPaymentIntent(
-                                        paymentIntentClientSecret = secret,
-                                        configuration = prepared.configuration
-                                    )
+                                    if (onPresentLivePaymentSheet != null) {
+                                        onPresentLivePaymentSheet(prepared, secret)
+                                    } else {
+                                        fallbackPaymentSheet?.presentWithPaymentIntent(
+                                            paymentIntentClientSecret = secret,
+                                            configuration = prepared.configuration
+                                        )
+                                    }
                                 }
                             )
                         } else if (activeTab == CheckoutModalTab.CARD) {

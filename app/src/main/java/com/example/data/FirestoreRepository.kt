@@ -2,8 +2,10 @@ package com.example.data
 
 import android.util.Log
 import androidx.annotation.Keep
+import com.google.firebase.Firebase
 import com.google.firebase.Timestamp
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.auth
 import com.google.firebase.firestore.DocumentId
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
@@ -37,12 +39,11 @@ fun handleFirestoreError(exception: Throwable, operationType: OperationType, pat
         ?: causes.firstOrNull { it !is CancellationException }
         ?: exception
 
-    val auth = try {
-        FirebaseAuth.getInstance()
+    val currentUser = try {
+        Firebase.auth.currentUser
     } catch (_: Exception) {
         null
     }
-    val currentUser = auth?.currentUser
 
     val providerInfoList = currentUser?.providerData?.map { provider ->
         JSONObject().apply {
@@ -142,9 +143,15 @@ data class FirestoreCloudTransactionLog(
     @ServerTimestamp val createdAt: Timestamp? = null
 )
 
+data class AuthenticatedUserSummary(
+    val uid: String,
+    val displayName: String,
+    val email: String
+)
+
 open class FirestoreRepository(
     private val db: FirebaseFirestore,
-    private val auth: FirebaseAuth = FirebaseAuth.getInstance()
+    private val auth: FirebaseAuth = Firebase.auth
 ) {
     companion object {
         val ALLOWED_PAYOUT_METHODS = setOf(
@@ -165,6 +172,28 @@ open class FirestoreRepository(
             "FAILED",
             "CANCELED"
         )
+
+        val ALLOWED_LOG_TYPES = setOf(
+            "PAYMENT",
+            "SCANNED_ITEM",
+            "PAYOUT",
+            "WEB_CHECKOUT"
+        )
+
+        fun sanitizeFirestoreId(raw: String, fallbackPrefix: String): String {
+            val sanitized = raw.replace(Regex("[^a-zA-Z0-9_\\-]"), "_").trim('_')
+            return sanitized.ifBlank { "${fallbackPrefix}_${System.currentTimeMillis()}" }.take(128)
+        }
+    }
+
+    open fun currentUserSummary(): AuthenticatedUserSummary? {
+        val user = auth.currentUser ?: return null
+        val uid = user.uid.takeIf { it.isNotBlank() } ?: return null
+        return AuthenticatedUserSummary(
+            uid = uid,
+            displayName = user.displayName?.trim().orEmpty(),
+            email = user.email?.trim().orEmpty()
+        )
     }
 
     open fun requireUserId(): String {
@@ -180,19 +209,35 @@ open class FirestoreRepository(
         return try {
             val uid = requireUserId()
             path = "users/$uid"
-            val payload = mapOf(
-                "userId" to uid,
-                "fullName" to profile.fullName,
-                "email" to profile.email,
-                "role" to profile.role,
-                "organization" to profile.organization,
-                "orgId" to profile.orgId,
-                "country" to profile.country,
-                "currency" to profile.currency,
-                "createdAt" to (profile.createdAt ?: FieldValue.serverTimestamp()),
+            val docRef = db.collection("users").document(uid)
+            val safeName = profile.fullName.trim().ifBlank {
+                auth.currentUser?.displayName?.trim().orEmpty().ifBlank { "Merchant User" }
+            }.take(100)
+            val safeEmail = profile.email.trim().ifBlank {
+                auth.currentUser?.email?.trim().orEmpty().ifBlank { "merchant@globalmarket.pro" }
+            }.take(120)
+
+            val mutableFields = mapOf<String, Any?>(
+                "fullName" to safeName,
+                "email" to safeEmail,
+                "role" to profile.role.take(50),
+                "organization" to profile.organization.take(100),
+                "orgId" to profile.orgId.take(50),
+                "country" to profile.country.take(60),
+                "currency" to profile.currency.ifBlank { "USD" }.take(10),
                 "updatedAt" to FieldValue.serverTimestamp()
-            )
-            db.collection("users").document(uid).set(payload).await()
+            ).filterValues { it != null }
+
+            val existing = docRef.get().await()
+            if (existing.exists()) {
+                docRef.update(mutableFields).await()
+            } else {
+                val createPayload = mutableFields + mapOf(
+                    "userId" to uid,
+                    "createdAt" to FieldValue.serverTimestamp()
+                )
+                docRef.set(createPayload).await()
+            }
             Result.success(Unit)
         } catch (e: CancellationException) {
             throw e
@@ -231,11 +276,13 @@ open class FirestoreRepository(
         return try {
             val uid = requireUserId()
             path = "users/$uid/payout_settings/active"
+            val docRef = db.collection("users").document(uid)
+                .collection("payout_settings").document("active")
             val normalizedMethod = setting.selectedMethod.uppercase().takeIf {
                 it in setOf("BANK_WIRE", "PAYPAL", "STRIPE_PAYOUT")
             } ?: "BANK_WIRE"
-            val payload = mapOf(
-                "userId" to uid,
+
+            val mutableFields = mapOf<String, Any?>(
                 "selectedMethod" to normalizedMethod,
                 "bankName" to setting.bankName.take(100),
                 "accountHolderName" to setting.accountHolderName.take(100),
@@ -247,12 +294,19 @@ open class FirestoreRepository(
                 "recipientName" to setting.recipientName.take(100),
                 "phoneOrPaypalMe" to setting.phoneOrPaypalMe.take(100),
                 "accountType" to setting.accountType.take(40),
-                "createdAt" to (setting.createdAt ?: FieldValue.serverTimestamp()),
                 "updatedAt" to FieldValue.serverTimestamp()
-            )
-            db.collection("users").document(uid)
-                .collection("payout_settings").document("active")
-                .set(payload).await()
+            ).filterValues { it != null }
+
+            val existing = docRef.get().await()
+            if (existing.exists()) {
+                docRef.update(mutableFields).await()
+            } else {
+                val createPayload = mutableFields + mapOf(
+                    "userId" to uid,
+                    "createdAt" to FieldValue.serverTimestamp()
+                )
+                docRef.set(createPayload).await()
+            }
             Result.success(Unit)
         } catch (e: CancellationException) {
             throw e
@@ -291,31 +345,42 @@ open class FirestoreRepository(
         var path = "users/unauthenticated/payouts"
         return try {
             val uid = requireUserId()
-            val docId = payout.payoutId.ifBlank { "payout_${System.currentTimeMillis()}" }.take(128)
+            val docId = sanitizeFirestoreId(payout.payoutId, "payout")
             path = "users/$uid/payouts/$docId"
+            val docRef = db.collection("users").document(uid)
+                .collection("payouts").document(docId)
             val normalizedMethod = payout.method.uppercase().takeIf { it in ALLOWED_PAYOUT_METHODS } ?: "BANK_WIRE"
             val normalizedStatus = payout.status.uppercase().takeIf { it in ALLOWED_PAYOUT_STATUSES } ?: "PROCESSING"
-            val safeAmount = payout.amount.coerceAtLeast(0.01)
-            val safeFee = payout.fee.coerceAtLeast(0.0)
-            val safeNet = payout.netAmount.coerceAtLeast(0.0)
-            val payload = mapOf(
-                "userId" to uid,
-                "payoutId" to docId,
-                "method" to normalizedMethod,
-                "amount" to safeAmount,
-                "fee" to safeFee,
-                "netAmount" to safeNet,
-                "currency" to payout.currency.ifBlank { "USD" }.take(10),
-                "recipientName" to payout.recipientName.ifBlank { "Merchant Owner" }.take(120),
-                "destinationSummary" to payout.destinationSummary.take(160),
-                "reference" to payout.reference.ifBlank { docId }.take(128),
-                "status" to normalizedStatus,
-                "createdAt" to (payout.createdAt ?: FieldValue.serverTimestamp()),
-                "updatedAt" to FieldValue.serverTimestamp()
-            )
-            db.collection("users").document(uid)
-                .collection("payouts").document(docId)
-                .set(payload).await()
+
+            val existing = docRef.get().await()
+            if (existing.exists()) {
+                docRef.update(
+                    mapOf(
+                        "status" to normalizedStatus,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                ).await()
+            } else {
+                val safeAmount = payout.amount.coerceAtLeast(0.01)
+                val safeFee = payout.fee.coerceAtLeast(0.0)
+                val safeNet = payout.netAmount.coerceAtLeast(0.0)
+                val payload = mapOf<String, Any?>(
+                    "userId" to uid,
+                    "payoutId" to docId,
+                    "method" to normalizedMethod,
+                    "amount" to safeAmount,
+                    "fee" to safeFee,
+                    "netAmount" to safeNet,
+                    "currency" to payout.currency.ifBlank { "USD" }.take(10),
+                    "recipientName" to payout.recipientName.ifBlank { "Merchant Owner" }.take(120),
+                    "destinationSummary" to payout.destinationSummary.take(160),
+                    "reference" to payout.reference.ifBlank { docId }.take(128),
+                    "status" to normalizedStatus,
+                    "createdAt" to FieldValue.serverTimestamp(),
+                    "updatedAt" to FieldValue.serverTimestamp()
+                ).filterValues { it != null }
+                docRef.set(payload).await()
+            }
             Result.success(Unit)
         } catch (e: CancellationException) {
             throw e
@@ -330,13 +395,14 @@ open class FirestoreRepository(
         return try {
             val uid = requireUserId()
             require(payoutId.isNotBlank()) { "Payout ID must not be blank for status update" }
+            val docId = sanitizeFirestoreId(payoutId, "payout")
             val normalizedStatus = newStatus.uppercase()
             require(normalizedStatus in ALLOWED_PAYOUT_STATUSES) {
                 "Unsupported payout status '$newStatus'"
             }
-            path = "users/$uid/payouts/$payoutId"
+            path = "users/$uid/payouts/$docId"
             db.collection("users").document(uid)
-                .collection("payouts").document(payoutId)
+                .collection("payouts").document(docId)
                 .update(
                     mapOf(
                         "status" to normalizedStatus,
@@ -389,23 +455,39 @@ open class FirestoreRepository(
         var path = "users/unauthenticated/transaction_logs"
         return try {
             val uid = requireUserId()
-            val docId = log.logId.ifBlank { "log_${System.currentTimeMillis()}" }
+            val docId = sanitizeFirestoreId(log.logId, "log")
             path = "users/$uid/transaction_logs/$docId"
-            val payload = mapOf(
-                "userId" to uid,
-                "logId" to docId,
-                "logType" to log.logType,
-                "title" to log.title.ifBlank { "Transaction" },
-                "amount" to log.amount,
-                "currencyCode" to log.currencyCode.ifBlank { "USD" },
-                "referenceCode" to log.referenceCode.ifBlank { docId },
-                "customerOrRecipient" to log.customerOrRecipient,
-                "status" to log.status,
-                "createdAt" to (log.createdAt ?: FieldValue.serverTimestamp())
-            )
-            db.collection("users").document(uid)
+            val docRef = db.collection("users").document(uid)
                 .collection("transaction_logs").document(docId)
-                .set(payload).await()
+            val safeType = log.logType.uppercase().takeIf { it in ALLOWED_LOG_TYPES } ?: "PAYMENT"
+            val safeTitle = log.title.ifBlank { "Transaction" }.take(160)
+            val safeCustomer = log.customerOrRecipient.take(120)
+            val safeStatus = log.status.ifBlank { "SETTLED" }.take(40)
+
+            val existing = docRef.get().await()
+            if (existing.exists()) {
+                docRef.update(
+                    mapOf(
+                        "title" to safeTitle,
+                        "customerOrRecipient" to safeCustomer,
+                        "status" to safeStatus
+                    )
+                ).await()
+            } else {
+                val payload = mapOf<String, Any?>(
+                    "userId" to uid,
+                    "logId" to docId,
+                    "logType" to safeType,
+                    "title" to safeTitle,
+                    "amount" to log.amount.coerceAtLeast(0.0),
+                    "currencyCode" to log.currencyCode.ifBlank { "USD" }.take(10),
+                    "referenceCode" to log.referenceCode.ifBlank { docId }.take(128),
+                    "customerOrRecipient" to safeCustomer,
+                    "status" to safeStatus,
+                    "createdAt" to FieldValue.serverTimestamp()
+                ).filterValues { it != null }
+                docRef.set(payload).await()
+            }
             Result.success(Unit)
         } catch (e: CancellationException) {
             throw e

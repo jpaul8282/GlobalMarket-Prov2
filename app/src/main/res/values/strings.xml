@@ -6,4 +6,5 @@
     <string name="paymentsheet_simulated_outcome_label">Simulated Checkout Outcome</string>
     <string name="paymentsheet_launch_sim_cta">Simulate PaymentSheet Checkout</string>
     <string name="paymentsheet_launch_native_cta">Launch Native Stripe Sheet</string>
+    <string name="main_checkout_button">Checkout</string>
 </resources>

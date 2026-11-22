@@ -109,6 +109,18 @@ data class StripePayoutListResponseDto(
     @param:Json(name = "has_more") val hasMore: Boolean = false
 )
 
+data class StripePaymentIntentDto(
+    @param:Json(name = "id") val id: String = "",
+    @param:Json(name = "object") val objectType: String = "payment_intent",
+    @param:Json(name = "amount") val amountMinor: Long = 0L,
+    @param:Json(name = "currency") val currency: String = "usd",
+    @param:Json(name = "client_secret") val clientSecret: String? = null,
+    @param:Json(name = "status") val status: String = "requires_payment_method",
+    @param:Json(name = "livemode") val livemode: Boolean = false,
+    @param:Json(name = "description") val description: String? = null,
+    @param:Json(name = "receipt_email") val receiptEmail: String? = null
+)
+
 // ==========================================
 // Domain Models & Result Wrapper
 // ==========================================
@@ -184,6 +196,15 @@ data class StripePayoutItem(
     val payoutType: String
 )
 
+data class StripePaymentIntentSession(
+    val paymentIntentId: String,
+    val clientSecret: String,
+    val amountMinor: Long,
+    val currencyCode: String,
+    val status: String,
+    val livemode: Boolean
+)
+
 sealed class StripePayoutApiResult<out T> {
     data class Success<T>(val data: T) : StripePayoutApiResult<T>()
     data class MissingApiKey(val message: String) : StripePayoutApiResult<Nothing>()
@@ -240,6 +261,20 @@ interface StripePayoutApiService {
         @Path("payoutId") payoutId: String,
         @Header("Stripe-Account") stripeAccount: String? = null
     ): StripePayoutDto
+
+    @FormUrlEncoded
+    @POST("v1/payment_intents")
+    suspend fun createPaymentIntent(
+        @Header("Authorization") authorization: String,
+        @Field("amount") amountMinor: Long,
+        @Field("currency") currencyLowercase: String,
+        @Field("automatic_payment_methods[enabled]") automaticPaymentMethodsEnabled: Boolean = true,
+        @Field("description") description: String? = null,
+        @Field("receipt_email") receiptEmail: String? = null,
+        @Field("metadata[source]") metadataSource: String = "GlobalMarketPro",
+        @Header("Idempotency-Key") idempotencyKey: String? = null,
+        @Header("Stripe-Account") stripeAccount: String? = null
+    ): StripePaymentIntentDto
 }
 
 // ==========================================
@@ -310,6 +345,14 @@ class StripePayoutGateway(
         return raw
     }
 
+    fun isPublishableKeyConfigured(): Boolean =
+        resolvedPublishableKey()?.startsWith("pk_") == true
+
+    fun isSecretKeyConfigured(): Boolean {
+        val sk = resolvedSecretKey() ?: return false
+        return !sk.startsWith("pk_") && (sk.startsWith("sk_") || sk.startsWith("rk_"))
+    }
+
     fun resolvedConnectedAccountId(): String? {
         val raw = connectedAccountProvider().trim()
         if (raw.isBlank() || raw == PLACEHOLDER_ACCOUNT || raw.startsWith("MY_") || !raw.startsWith("acct_")) {
@@ -317,8 +360,6 @@ class StripePayoutGateway(
         }
         return raw
     }
-
-    fun isPublishableKeyConfigured(): Boolean = resolvedPublishableKey() != null
 
     fun isPublishableKeyMistakenForSecret(): Boolean = resolvedSecretKey()?.startsWith("pk_") == true
 
@@ -559,6 +600,68 @@ class StripePayoutGateway(
                 httpCode = null,
                 stripeErrorCode = "network_error",
                 message = e.localizedMessage ?: "Failed to cancel Stripe payout"
+            )
+        }
+    }
+
+    suspend fun createPaymentIntent(
+        amountMinor: Long,
+        currencyCode: String,
+        description: String? = null,
+        receiptEmail: String? = null,
+        idempotencyKey: String? = null
+    ): StripePayoutApiResult<StripePaymentIntentSession> {
+        validateSecretKeyForRestCalls("create a Stripe PaymentIntent")?.let { return it }
+        val secretKey = resolvedSecretKey()!!
+
+        if (amountMinor <= 0L) {
+            return StripePayoutApiResult.ApiError(
+                httpCode = 400,
+                stripeErrorCode = "amount_too_small",
+                message = "PaymentIntent amount must be greater than zero."
+            )
+        }
+
+        val normalizedCurrency = currencyCode.lowercase(Locale.US)
+        val connectedAccount = resolvedConnectedAccountId()
+
+        return try {
+            val dto = apiProvider().createPaymentIntent(
+                authorization = "Bearer $secretKey",
+                amountMinor = amountMinor,
+                currencyLowercase = normalizedCurrency,
+                automaticPaymentMethodsEnabled = true,
+                description = description,
+                receiptEmail = receiptEmail,
+                idempotencyKey = idempotencyKey,
+                stripeAccount = connectedAccount
+            )
+            val secret = dto.clientSecret
+            if (secret.isNullOrBlank()) {
+                StripePayoutApiResult.ApiError(
+                    httpCode = 500,
+                    stripeErrorCode = "missing_client_secret",
+                    message = "Stripe PaymentIntent response did not contain a client_secret."
+                )
+            } else {
+                StripePayoutApiResult.Success(
+                    StripePaymentIntentSession(
+                        paymentIntentId = dto.id,
+                        clientSecret = secret,
+                        amountMinor = dto.amountMinor,
+                        currencyCode = dto.currency.uppercase(Locale.US),
+                        status = dto.status,
+                        livemode = dto.livemode
+                    )
+                )
+            }
+        } catch (e: HttpException) {
+            parseHttpException(e)
+        } catch (e: Exception) {
+            StripePayoutApiResult.ApiError(
+                httpCode = null,
+                stripeErrorCode = "network_error",
+                message = e.localizedMessage ?: "Failed to create Stripe PaymentIntent"
             )
         }
     }

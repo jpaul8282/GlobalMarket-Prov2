@@ -21,6 +21,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
@@ -915,24 +916,58 @@ class GlobalMarketViewModel(
             // Sync user profile and payout settings from Cloud Firestore if authenticated
             firestoreRepository?.let { firestoreRepo ->
                 try {
-                    firestoreRepo.getUserProfile().getOrNull()?.let { cloudProfile ->
-                        if (cloudProfile.fullName.isNotBlank()) {
-                            val initials = cloudProfile.fullName.trim().split(" ")
+                    val profileResult = firestoreRepo.getUserProfile()
+                    val cloudProfile = profileResult.getOrNull()
+                    if (cloudProfile != null && cloudProfile.fullName.isNotBlank()) {
+                        val initials = cloudProfile.fullName.trim().split(" ")
+                            .filter { it.isNotEmpty() }
+                            .take(2)
+                            .map { it.first().uppercaseChar() }
+                            .joinToString("")
+                            .ifEmpty { "GP" }
+                        _userProfile.value = _userProfile.value.copy(
+                            name = cloudProfile.fullName,
+                            email = cloudProfile.email.ifBlank { _userProfile.value.email },
+                            organization = cloudProfile.organization.ifBlank { _userProfile.value.organization },
+                            orgId = cloudProfile.orgId.ifBlank { _userProfile.value.orgId },
+                            initials = initials
+                        )
+                    } else if (profileResult.isSuccess) {
+                        firestoreRepo.currentUserSummary()?.let { googleUser ->
+                            val resolvedName = googleUser.displayName.ifBlank {
+                                googleUser.email.substringBefore("@").ifBlank { _userProfile.value.name }
+                            }
+                            val resolvedEmail = googleUser.email.ifBlank { _userProfile.value.email }
+                            val initials = resolvedName.trim().split(" ")
                                 .filter { it.isNotEmpty() }
                                 .take(2)
                                 .map { it.first().uppercaseChar() }
                                 .joinToString("")
-                                .ifEmpty { "JP" }
+                                .ifEmpty { "GP" }
                             _userProfile.value = _userProfile.value.copy(
-                                name = cloudProfile.fullName,
-                                email = cloudProfile.email.ifBlank { _userProfile.value.email },
-                                organization = cloudProfile.organization.ifBlank { _userProfile.value.organization },
-                                orgId = cloudProfile.orgId.ifBlank { _userProfile.value.orgId },
+                                name = resolvedName,
+                                email = resolvedEmail,
                                 initials = initials
                             )
+                            firestoreRepo.saveUserProfile(
+                                com.example.data.FirestoreUserProfile(
+                                    userId = googleUser.uid,
+                                    fullName = resolvedName,
+                                    email = resolvedEmail,
+                                    role = "OWNER",
+                                    organization = _userProfile.value.organization,
+                                    orgId = _userProfile.value.orgId,
+                                    country = selectedCountry.value,
+                                    currency = _selectedCurrency.value.code
+                                )
+                            )
                         }
+                    } else {
+                        _cloudSyncError.value = profileResult.exceptionOrNull()?.localizedMessage
                     }
-                    firestoreRepo.getPayoutSetting().getOrNull()?.let { cloudSetting ->
+
+                    val settingResult = firestoreRepo.getPayoutSetting()
+                    settingResult.getOrNull()?.let { cloudSetting ->
                         val method = when (cloudSetting.selectedMethod.uppercase()) {
                             "PAYPAL" -> PayoutMethodType.PAYPAL
                             "STRIPE_PAYOUT" -> PayoutMethodType.STRIPE_PAYOUT
@@ -956,7 +991,11 @@ class GlobalMarketViewModel(
                             )
                         )
                     }
-                } catch (_: Exception) {}
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    _cloudSyncError.value = e.localizedMessage
+                }
             }
         }
     }
@@ -966,6 +1005,9 @@ class GlobalMarketViewModel(
 
     private val _isCheckoutVisible = MutableStateFlow(false)
     val isCheckoutVisible = _isCheckoutVisible.asStateFlow()
+
+    private val _openCheckoutToPaymentSheet = MutableStateFlow(false)
+    val openCheckoutToPaymentSheet: StateFlow<Boolean> = _openCheckoutToPaymentSheet.asStateFlow()
 
     private val _isQrPaymentVisible = MutableStateFlow(false)
     val isQrPaymentVisible: StateFlow<Boolean> = _isQrPaymentVisible.asStateFlow()
@@ -2944,19 +2986,33 @@ class GlobalMarketViewModel(
     // Real-Time Cloud Firestore Payout Status Listener
     // ==========================================
     private val firestoreListenerTrigger = MutableStateFlow(0)
+    private val isSigningOut = MutableStateFlow(false)
+    private val _cloudSyncError = MutableStateFlow<String?>(null)
+    val cloudSyncError: StateFlow<String?> = _cloudSyncError.asStateFlow()
     private val lastObservedCloudStatuses = mutableMapOf<String, String>()
     private var hasReceivedInitialCloudSnapshot = false
 
+    fun clearCloudSyncError() {
+        _cloudSyncError.value = null
+    }
+
+    fun prepareForSignOut() {
+        isSigningOut.value = true
+    }
+
     fun retryFirestorePayoutListener() {
+        isSigningOut.value = false
         firestoreListenerTrigger.value += 1
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)
     val firestorePayoutStreamState: StateFlow<FirestorePayoutStreamState> =
-        firestoreListenerTrigger
-            .flatMapLatest { trigger ->
+        combine(firestoreListenerTrigger, isSigningOut) { trigger, signingOut ->
+            trigger to signingOut
+        }
+            .flatMapLatest { (trigger, signingOut) ->
                 val repo = firestoreRepository
-                if (repo == null) {
+                if (repo == null || signingOut) {
                     flowOf(FirestorePayoutStreamState.Unavailable)
                 } else {
                     repo.observeOwnerPayouts()
@@ -3855,9 +3911,20 @@ class GlobalMarketViewModel(
     val preparedPaymentSheetConfig: StateFlow<StripePaymentSheetPreparedConfig?> =
         _preparedPaymentSheetConfig.asStateFlow()
 
+    private val _isCreatingLivePaymentIntent = MutableStateFlow(false)
+    val isCreatingLivePaymentIntent: StateFlow<Boolean> =
+        _isCreatingLivePaymentIntent.asStateFlow()
+
     fun getStripeSdkEnvironmentBadge(): String = stripeTerminalProcessor.sdkEnvironmentBadge()
 
     fun getStripePublishableKeyHint(): String = stripeTerminalProcessor.maskedPublishableKeyHint()
+
+    fun isStripePublishableKeyConfigured(): Boolean =
+        stripeTerminalProcessor.resolvedPublishableKey() != null
+
+    fun isStripeLivePaymentIntentReady(): Boolean =
+        stripeTerminalProcessor.resolvedPublishableKey() != null &&
+            stripePayoutGateway.isSecretKeyConfigured()
 
     fun initializeStripeTerminalSdk(context: Context): String {
         val key = stripeTerminalProcessor.ensurePaymentConfigurationInitialized(context)
@@ -3975,6 +4042,72 @@ class GlobalMarketViewModel(
         }
     }
 
+    fun createAndPresentLivePaymentSheet(
+        context: Context?,
+        onPresentLivePaymentSheet: (StripePaymentSheetPreparedConfig, String) -> Unit
+    ) {
+        if (_isCreatingLivePaymentIntent.value) return
+        viewModelScope.launch {
+            _isCreatingLivePaymentIntent.value = true
+            _stripeTerminalCheckoutState.value = StripeTerminalCheckoutState.ValidatingInput
+            val request = buildCurrentPaymentSheetRequest()
+            val prepared = StripePaymentSheetConfigFactory.buildPreparedConfig(
+                context = context,
+                processor = stripeTerminalProcessor,
+                request = request
+            )
+            _preparedPaymentSheetConfig.value = prepared
+
+            val existingSecret = _paymentSheetLiveClientSecret.value.trim()
+            if (StripePaymentSheetConfigFactory.isLikelyLivePaymentIntentClientSecret(existingSecret)) {
+                _isCreatingLivePaymentIntent.value = false
+                _stripeTerminalCheckoutState.value = StripeTerminalCheckoutState.ConfirmingPaymentIntent(
+                    paymentIntentId = existingSecret.substringBefore("_secret_")
+                )
+                onPresentLivePaymentSheet(prepared, existingSecret)
+                return@launch
+            }
+
+            _stripeTerminalCheckoutState.value = StripeTerminalCheckoutState.TokenizingWithStripeSdk(
+                railLabel = "Stripe PaymentIntent (${prepared.currencyCode})",
+                currencyCode = prepared.currencyCode
+            )
+            val customerEmail = prepared.defaultBillingDetails.email?.takeIf { it.isNotBlank() }
+            val result = stripePayoutGateway.createPaymentIntent(
+                amountMinor = prepared.minorUnits,
+                currencyCode = prepared.currencyCode,
+                description = "GlobalMarket Pro POS (${prepared.configDigest})",
+                receiptEmail = customerEmail,
+                idempotencyKey = UUID.randomUUID().toString()
+            )
+            _isCreatingLivePaymentIntent.value = false
+            when (result) {
+                is StripePayoutApiResult.Success -> {
+                    _paymentSheetLiveClientSecret.value = result.data.clientSecret
+                    val updatedPrepared = preparePaymentSheetConfiguration(context)
+                    _stripeTerminalCheckoutState.value = StripeTerminalCheckoutState.ConfirmingPaymentIntent(
+                        paymentIntentId = result.data.paymentIntentId
+                    )
+                    onPresentLivePaymentSheet(updatedPrepared, result.data.clientSecret)
+                }
+                is StripePayoutApiResult.MissingApiKey -> {
+                    _stripeTerminalCheckoutState.value = StripeTerminalCheckoutState.Failed(
+                        errorCode = "missing_secret_key",
+                        message = "STRIPE_PUBLISHABLE_KEY is active, but creating a live PaymentIntent requires STRIPE_SECRET_KEY in AI Studio Secrets (or paste a backend client_secret).",
+                        isRetryable = true
+                    )
+                }
+                is StripePayoutApiResult.ApiError -> {
+                    _stripeTerminalCheckoutState.value = StripeTerminalCheckoutState.Failed(
+                        errorCode = result.stripeErrorCode ?: "payment_intent_error",
+                        message = result.message,
+                        isRetryable = true
+                    )
+                }
+            }
+        }
+    }
+
     fun onNativePaymentSheetResult(
         result: PaymentSheetResult,
         simulateNetworkDelayMs: Long = 0L
@@ -4028,15 +4161,21 @@ class GlobalMarketViewModel(
         }
     }
 
-    fun openCheckout() {
+    fun openCheckout(openPaymentSheetTab: Boolean = false) {
+        _openCheckoutToPaymentSheet.value = openPaymentSheetTab
         _isCheckoutVisible.value = true
         _paymentSuccess.value = false
         _isProcessing.value = false
         _stripeTerminalCheckoutState.value = StripeTerminalCheckoutState.Idle
     }
 
+    fun openPaymentSheetCheckout() {
+        openCheckout(openPaymentSheetTab = true)
+    }
+
     fun closeCheckout() {
         _isCheckoutVisible.value = false
+        _openCheckoutToPaymentSheet.value = false
         clearTransientCardInputs()
         _stripeTerminalCheckoutState.value = StripeTerminalCheckoutState.Idle
     }
@@ -4212,6 +4351,28 @@ class GlobalMarketViewModel(
         repository.insertLog(logEntity)
         repository.insertSalesTransaction(salesEntity)
         repository.insertTerminalLog(terminalLog)
+
+        firestoreRepository?.let { firestoreRepo ->
+            try {
+                firestoreRepo.recordTransactionLog(
+                    FirestoreCloudTransactionLog(
+                        userId = firestoreRepo.requireUserId(),
+                        logId = receipt.referenceCode,
+                        logType = "PAYMENT",
+                        title = "Stripe SDK ${receipt.railName} (${receipt.currencyCode})",
+                        amount = receipt.localizedAmountMajor,
+                        currencyCode = receipt.currencyCode,
+                        referenceCode = receipt.referenceCode,
+                        customerOrRecipient = receipt.customerName,
+                        status = "SETTLED"
+                    )
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _cloudSyncError.value = e.localizedMessage
+            }
+        }
     }
 
     fun openQrPayment() {
@@ -4260,6 +4421,28 @@ class GlobalMarketViewModel(
             repository.insert(entity)
             repository.insertLog(logEntity)
             _isSubscribed.value = true
+
+            firestoreRepository?.let { firestoreRepo ->
+                try {
+                    firestoreRepo.recordTransactionLog(
+                        FirestoreCloudTransactionLog(
+                            userId = firestoreRepo.requireUserId(),
+                            logId = refCode,
+                            logType = "PAYMENT",
+                            title = "Mobile Wallet QR Payment",
+                            amount = converted,
+                            currencyCode = targetCurr.code,
+                            referenceCode = refCode,
+                            customerOrRecipient = customerName,
+                            status = "COMPLETED"
+                        )
+                    )
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    _cloudSyncError.value = e.localizedMessage
+                }
+            }
         }
     }
 
@@ -4279,18 +4462,40 @@ class GlobalMarketViewModel(
     }
 
     fun updateProfile(name: String, email: String, organization: String) {
-        val initials = name.trim().split(" ")
+        val trimmedName = name.trim().ifBlank { _userProfile.value.name }
+        val trimmedEmail = email.trim().ifBlank { _userProfile.value.email }
+        val trimmedOrg = organization.trim().ifBlank { _userProfile.value.organization }
+        val initials = trimmedName.split(" ")
             .filter { it.isNotEmpty() }
             .take(2)
             .map { it.first().uppercaseChar() }
             .joinToString("")
-            .ifEmpty { "JP" }
+            .ifEmpty { "GP" }
         _userProfile.value = _userProfile.value.copy(
-            name = name,
-            email = email,
-            organization = organization,
+            name = trimmedName,
+            email = trimmedEmail,
+            organization = trimmedOrg,
             initials = initials
         )
+        firestoreRepository?.let { firestoreRepo ->
+            viewModelScope.launch {
+                val res = firestoreRepo.saveUserProfile(
+                    com.example.data.FirestoreUserProfile(
+                        userId = firestoreRepo.currentUserSummary()?.uid.orEmpty(),
+                        fullName = trimmedName,
+                        email = trimmedEmail,
+                        role = "OWNER",
+                        organization = trimmedOrg,
+                        orgId = _userProfile.value.orgId,
+                        country = selectedCountry.value,
+                        currency = _selectedCurrency.value.code
+                    )
+                )
+                if (res.isFailure) {
+                    _cloudSyncError.value = res.exceptionOrNull()?.localizedMessage ?: "Failed to sync profile"
+                }
+            }
+        }
     }
 
     fun toggleTwoFactor(enabled: Boolean) {
